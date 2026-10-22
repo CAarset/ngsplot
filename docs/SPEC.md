@@ -37,9 +37,9 @@ interactive-tool heritage (Netgen's GUI) rather than from C.
 
 ## Geometry: exact, not sampled
 
-`ngsolve.webgui.BuildRenderData` exports Bézier control points per element — the
-*exact* FE function, no sampling. Degrees are capped: `order2d = min(order, 3)`,
-`order3d = min(order, 2)`, default `order=2`.
+`ngsolve.webgui.BuildRenderData(mesh, func, order=2, ...)` exports Bezier control points
+per element — the *exact* FE function, no sampling. Degrees are capped:
+`order2d = min(order, 3)`, `order3d = min(order, 2)`.
 
 Order-2 triangle (`shader/utils.h`, `ORDER==2`), barycentric `(u, v)`, `w = 1-u-v`:
 
@@ -49,8 +49,11 @@ b10 = 2uw    b11 = 2vw   b20 = w*w
 P(u,v) = b00*p00 + b01*p01 + b02*p02 + b10*p10 + b11*p11 + b20*p20   # vec4 = (xyz, value)
 ```
 
-Normal (derivative cross product, then normalise), with
-`B00 = 2u`, `B01 = 2v`, `B10 = 2w`:
+Name `p{a}{b}` means barycentric exponents `(u, v, w) = (n-a-b, b, a)`; `index_pairs`
+lists the names in the order the renderer packs them into attributes
+(`three/mesh.ts:102-131`), `a` outer, `b` inner — the same enumeration as the payload.
+
+Normal (derivative cross product, then normalise), with `B00 = 2u`, `B01 = 2v`, `B10 = 2w`:
 
 ```
 du = B00*(p00-p10) + B01*(p01-p11) + B10*(p10-p20)
@@ -59,9 +62,11 @@ n  = normalize(cross(du.xyz, dv.xyz))
 ```
 
 Order 1 uses `p0,p1,p2` (lerp) and `n = normalize(cross(p1-p0, p2-p0))`; order 3 uses the
-cubic Bernstein basis (`p00..p30`).
+cubic basis (`p00..p30`). The fragment shader never re-evaluates the polynomial:
+`trigsplines.vert` computes position, value and normal at the lattice vertices and
+`function.frag` interpolates the varyings, so a software rasteriser must do the same.
 
-Sub-triangulation: each element is drawn as `n_segments²` sub-triangles of the reference
+Sub-triangulation: each element is drawn as `n_segments^2` sub-triangles of the reference
 triangle (`mesh.ts`, `MAX_SUBDIVISION = 20`, `geo.setDrawRange(0, 3*sd*sd)`). With lattice
 coordinates, `u = j/n`, `v = (i-j)/n`:
 
@@ -73,9 +78,70 @@ for i in range(n):
         (j+1, i-j-1), (j+1, i-j), (j, i-j)
 ```
 
+## Payload: the arrays Python sends
+
+`BuildRenderData` samples each element on `get_intrules(2, order2d)` (sub-triangles of the
+reference triangle, `_make_trig`), evaluates `CF((xyz, func))` there in **float64**, and
+fits a Bezier triangle with the inverse of the forward Bernstein matrix:
+
+```python
+B[j, k] = n!/(i! j! (n-i-j)!) * x**i * y**j * (1-x-y)**(n-i-j)   # netgen/webgui.py:86
+ctrl   = inv(B) @ samples          # B rows: samples at (ix/n, iy/n); cols: names p{a}{b}
+```
+
+with the row and column indices running through the identical enumeration (outer 0..n,
+inner 0..n-outer), `inv(B)` cached per element type in `netgen.webgui._bernstein_cache`.
+Then `ngsplot.geometry.trig_points` unpacks base64 float32 arrays (`decode_array`):
+
+| list | rows | arrays | components |
+| --- | --- | --- | --- |
+| `Bezier_trig_points` | elements | `K` + `K` (`n==1`) or `K//2` (`n>1`) | `vec4` per control point; then `vec2` per control point, or `vec4` packing two |
+| `Bezier_points` | `3 * elements` | `n+1` + `n+1` | `vec4` per point; then `vec2` per point |
+| `edges` | boundary segments | `n+1` | `vec4` per point |
+
+`K = (n+1)(n+2)/2`. A `vec4` control point is `(x, y, z, value)` — the first function
+component rides along in slot 3; the remaining components are the `vec` attributes
+(`vec00_01` etc.), which is why a two-component function leaves the *second* vector
+component zero (padding only), verified for degrees 1-3. Scalar functions send no `vec`
+arrays at all. Row `3*e + k` of `Bezier_points` is edge `k` of element `e`, the edges being
+`(t,0)`, `(0,t)`, `(t,1-t)` of the reference triangle; `edges` lists the boundary segments
+walked from their second to their first vertex, with the value slot identically zero
+(`cf_edge = CF((xyz, 0.0))`).
+
+`k` of the payload and `p{a}{b}` are the same slot, and on a straight triangle its
+position is
+
+```
+ctrl[slot(a,b), :3] = ( b*V0 + a*V1 + (n-a-b)*V2 ) / n        # V = element vertices
+```
+
+i.e. the shader's `(u, v, w)` corresponds to `(V2, V1, V0)`: the parametrization of the
+Bezier patch is a reflection of the mesh parametrisation, orientation-reversing. It is
+invisible in the image (the control points carry their own positions) but it decides
+`ngsplot.bezier`'s reading of the slots, and it flips the sign of the surface normal —
+which matters, because shading is one-sided (`dark_backside`). Greville abscissa of the
+slot: `(u, v) = ((n-a-b)/n, b/n)`.
+
 Deformation (`have_deformation = mesh_dim == funcdim and not is_complex`) displaces
-`p.xyz += deformation * value`; for a 2D mesh with a scalar function
-(`DEFORMATION_2D`) it is `p.z += value` — this is Draw's `deform_2d`/surface view.
+`p.xyz += deformation * value` (`DEFORMATION`); for a 2D mesh with a scalar or complex
+function it is `p.z += GetValue(deformation * value)` (`DEFORMATION_2D`), Draw's
+`deform_2d`/surface view. Both are applied in the vertex shader **after** the normal is
+built, so a deformed surface is shaded as if it were flat, and under `DEFORMATION_2D`
+`GetNormal` applies the complex-phase rewrite to the `w` slots of its own inputs only.
+Python also lifts a 2-component vector deformation: `deformation = CF((deformation, 0.0))`
+(`ngsolve/webgui.py:269-270`).
+
+## Range: what the colour scale is fitted from
+
+`funcmin/funcmax` come from `getMinMax(pmat[:, 3:].flatten())` over the float64 *samples*
+(not the float32 control points), and `ngs.Vector.MinMax` initialises its bounds with
+`numeric_limits<double>::max()`/`min()` instead of `+-inf`. Two consequences worth
+copying: a function that never exceeds `DBL_MIN` reports `DBL_MIN` as its maximum, and
+infinities are excluded (control points are min/maxed with `ignore_inf=True`; NaN never
+takes part). `updatePMinMax` does the same per column of the positions, giving
+`mesh_center = (pmin+pmax)/2`, `mesh_radius = |pmax-pmin|/2`. The two keys are written
+only inside the `if d['draw_vol']` branch, so a payload built with `draw_vol=False` has
+no range to read.
 
 ## Colour: 8 discrete bands, nearest-neighbour
 
