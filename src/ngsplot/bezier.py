@@ -176,6 +176,18 @@ def get_value(value3, function_mode=0.0, complex_scale=(1.0, 0.0)):
     return np.zeros(value3.shape[:-1], dtype=value3.dtype)
 
 
+def _unit(n):
+    """Divide by the length, exactly as the shader's ``normalize`` does.
+
+    A collapsed patch has a zero cross product, and dividing by zero is what GLSL
+    does there: the NaNs that follow are what cull the element's whole lattice,
+    because they spread to every vertex of it (:mod:`ngsplot.raster` drops those
+    triangles, so the element simply is not in the picture).
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        return n / np.linalg.norm(n, axis=-1, keepdims=True)
+
+
 def vector_values(order, vectors, u, v):
     """GetVectorValues: the two packed vector components, same basis as the position."""
     return _weighted(_bernstein(_check_order(order), u, v), vectors)
@@ -225,8 +237,9 @@ def evaluate(order, ctrl, u, v, *, vectors=None, deformation=0.0, mode="none",
     if mode == "none" or deformation == 0.0:
         return xyz, value
     if vectors is None:
-        vectors = np.zeros(pv.shape[:-1] + (2,), dtype=pv.dtype)
-    vv = vector_values(order, vectors, u, v)
+        vv = np.zeros(pv.shape[:-1] + (2,), dtype=pv.dtype)
+    else:
+        vv = vector_values(order, vectors, u, v)
     disp = np.stack([value, vv[..., 0], vv[..., 1]], axis=-1) * deformation
     if mode == "3d":
         return xyz + disp, value
@@ -254,7 +267,7 @@ def normal(order, ctrl, u, v, *, vectors=None, deformation=0.0, mode="none",
         nrm = np.asarray(vertex_normals)
         n = (u[..., None] * nrm[..., 0, :] + v[..., None] * nrm[..., 1, :]
              + (1.0 - u - v)[..., None] * nrm[..., 2, :])
-        return n / np.linalg.norm(n, axis=-1, keepdims=True)
+        return _unit(n)
 
     ctrl = np.asarray(ctrl)
     deformation = float(deformation)
@@ -273,7 +286,7 @@ def normal(order, ctrl, u, v, *, vectors=None, deformation=0.0, mode="none",
         du = _deform(du, None, deformation, slice(2, 3), None)
         dv = _deform(dv, None, deformation, slice(2, 3), None)
     n = np.cross(du[..., :3], dv[..., :3])
-    return n / np.linalg.norm(n, axis=-1, keepdims=True)
+    return _unit(n)
 
 
 def _deform(d, dvec, deformation, target, src):

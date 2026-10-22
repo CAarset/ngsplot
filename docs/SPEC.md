@@ -173,8 +173,12 @@ The palette is `ramp(i/(n-1))` for `i = 0..n-1`, and the live texture contents a
 ```
 
 `ncolors` defaults to 8 (`gui.ts`), is adjustable 2..32, and `Colormap.colors`
-(a custom palette) replaces the ramp if given. Mesh-only draws use a
-material-per-region texture instead (`colormap_size > 1`) and hide the colorbar.
+(a custom palette) replaces the ramp if given. A draw with no function (`colors` in the
+payload, `funcdim = 0`) uploads those region colours instead — `makeEdgeColorsTexture`
+(`edges.ts:6-21`) packs them as RGBA texels, `(width, height) = (min(n,1024),
+ceil(n/width))`, alpha 1 — so the one-region unit square sends a **single green texel**
+(`tests/gt/mesh_only.json`) and `colormap_size` stays `(1, 1)`. The colorbar is hidden:
+the bar's measured rectangle is untouched white in that scene.
 
 ## Shading: per-fragment Phong in view space
 
@@ -194,10 +198,19 @@ dimm    = (dark_backside and inside) ? 0.5 : 1
 rgb     = dimm * (color * (0.3 + diffuse) + spec * 0.3)
 ```
 
+`modelViewMatrix` in line 191 is the *object* matrix as the camera sees it, not the view
+matrix on its own: the renderer never moves the camera, so all of the centring and scaling
+lives in that matrix and the light sees the surface where the user put it. Feeding the
+eye-space point instead leaves the specular term wrong for every mesh that is not centred
+on the origin — a mean of twenty grey levels over the surface of `tests/gt/square_scalar`,
+against 0.03 once the object matrix is included.
+
 The `spec` term is why a single colour band is a *smooth gradient* on screen instead of a
 flat fill — 700+ distinct RGB values were measured inside one band, while the band
-boundaries stay hard. `alpha = color.w = 1` for surfaces; `NO_FUNCTION_VALUES` (mesh-only)
-paints `(0.7, 0.7, 0.7)` before lighting.
+boundaries stay hard. `alpha = color.w = 1` for surfaces; `NO_FUNCTION_VALUES` paints
+`(0.7, 0.7, 0.7)` before lighting, and it is defined exactly when `data.draw_surf ===
+false` (`mesh.ts:51`) — the `null` a plain `Draw` sends is *not* `false`, so an ordinary
+mesh draw is coloured by its region colour, not greyed out.
 
 ## Camera
 
@@ -249,6 +262,67 @@ MSAA (`antialias: true`), `devicePixelRatio` respected.
 Implemented in `src/ngsplot/camera.py`, with `tests/gt/camera.json` (`tools/probe_camera.py`)
 holding the object, view and projection matrices of all nine ground-truth scenes as the known
 answers.
+
+## Raster: painting it without a GPU
+
+`src/ngsplot/raster.py` reproduces what those two programs do, in numpy, one element at a
+time. `tests/test_parity.py` puts the result against all eight recorded pictures that draw
+a surface: inside the surface and away from the lines that are not painted yet, the median
+difference is zero grey levels out of 255 and the mean is 0.03 to 0.35. What is left is a
+quarter of a percent of pixels that sit exactly on a colour band boundary, where the
+shader's float32 `floor` and this module's float64 one choose neighbouring texels.
+
+Per element, in the order the GPU uses:
+
+* **Lattice.** `bezier.lattice` evaluates position, value and normal at the lattice
+  vertices `(j, i-j)` of the `n_segments` sub-triangulation, which is what
+  `trigsplines.vert` does before it hands the three quantities to the fragment stage as
+  varyings. The polynomial is not re-evaluated per pixel, and a deformation is added to
+  the position *after* the normal is built (`trigsplines.vert:25-30`), so a deformed
+  surface is shaded as the flat one.
+* **Projection.** The lattice goes through `camera.model_view_projection` to pixel
+  centres, carrying `1/w`: `p_`, `value_` and `normal_` are interpolated with perspective
+  correction, as GL does, not linearly in screen space.
+* **Sub-triangles.** `n_segments^2` of them, each a half-space test on its three edges at
+  the centre of every pixel of its bounding box. A NaN in any control point poisons every
+  lattice vertex of the element, which is the shader's per-vertex `isNan` guard culling
+  all of them at once.
+* **Fragments run once per pixel**, at the `gl_FragCoord` centre, not once per sample.
+  Measured: shading each sample at its own position makes the interior error twelve times
+  worse (mean 0.145 grey levels instead of 0.0119) and puts every disagreement on a band
+  edge. The multisampled framebuffer mixes coverage; the colour is the one the centre
+  produced.
+* **Facing.** `gl_FrontFacing` counts counter-clockwise in window space, which under the
+  y-downward pixel convention is a positive cross product of the screen-space edges. The
+  back side has its normal flipped and `inside` set, and `dark_backside` then multiplies
+  its colour by exactly 0.5 -- the two effects always travel together, which is what
+  `test_the_back_side_gets_the_flipped_normal_and_half_the_light` pins. Which real winding
+  counts as front is a mirroring convention between ngsolve and three.js, settled by the
+  recorded picture rather than argued.
+* **Samples.** `Canvas` keeps `samples^2` colour planes and `samples^2` depth planes and
+  averages the colours on read, because that is a multisampled framebuffer: one colour
+  *and* one depth per sample, averaged on resolve. A framebuffer that blended instead --
+  the obvious implementation -- leaves the shared edge of two coplanar sub-triangles
+  visibly grey, because two quarters of coverage composite to 0.4375 instead of covering
+  the union; the recorded silhouettes show the union.
+* **Depth.** `LessEqualDepth`, three.js' default, so coplanar triangles are painted in
+  submission order and the later one wins. The surface additionally draws with
+  `polygonOffset(1, 1)`, which is the only reason the wireframe and the boundary edges --
+  submitted after it, at the same depth -- are visible at all.
+* **Colour space.** `round(clamp(c, 0, 1) * 255)`, nothing else. None of these
+  hand-written programs contains three.js' `colorspace_fragment` include and the canvas is
+  not colour-managed; putting the linear-to-sRGB ramp between the shader and the PNG costs
+  a mean of sixty-eight grey levels in the same comparison.
+* **Buffer geometry.** The screenshot is 900x600 while the drawing buffer is 894x594 --
+  the page keeps a scrollbar gutter -- and the buffer starts at the top left of the
+  picture. Shifting the comparison by one pixel costs an order of magnitude, which is what
+  makes that offset a measurement and not an assumption.
+
+Left for later, roughly in order of need: the lines (`Wireframe` and `Edges`, whose
+`THICK_LINES` expansion is spelled out under Overlays), the overlays, `function_mode == 8`
+(`getPositionAsColor`), the clipping plane, the selected-face highlight, `render_depth`,
+and the `DEFORMATION` displacement of a mesh whose dimension matches its function.
+
 ## Overlays
 
 * **Colorbar**: `PlaneGeometry(1, 0.07)` translated `+0.5` in x, `MeshBasicMaterial`
