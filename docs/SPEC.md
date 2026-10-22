@@ -201,21 +201,54 @@ paints `(0.7, 0.7, 0.7)` before lighting.
 
 ## Camera
 
-`PerspectiveCamera`, `fov = 40°` (vertical), `near = 1`, `far = 100`, up `(0,1,0)`, at
-`(0, 0, 3)` looking at the origin, `zoom = 1`, rotation matrix = identity for the default
-2D view. The mesh is normalised by `mesh_center`/`mesh_radius` from `render_data`
-(`scale = 1/mesh_radius`), so the mesh has radius 1 and fills ~92% of the vertical field.
+The camera never moves. `scene.ts:318-336` builds a `PerspectiveCamera` with `fov = 40°`
+(vertical), `near = 1`, `far = 100`, `zoom = 1`, up `(0,1,0)`, sitting at `(0, 0, 3)` with an
+identity quaternion, and nothing in the GUI ever touches it again: every change of view —
+including dragging with the mouse — is a premultiplication onto the **object** matrix. That
+matrix starts out (camera.ts `reset()`) as
+
+    mat = S(1 / mesh_radius) * T(-mesh_center)
+
+so the mesh is centred on the origin and fits the unit sphere, and `loadSettings`
+(camera.ts:174-220) then applies, in order: `settings.mat` if present (that is what the GUI's
+own save/restore writes, together with `center`; `isPerspectiveCamera` is stored but never
+read), then `settings.euler_angles` as degrees `Euler(a[0], a[1], a[2], a[3] || 'XYZ')`, then
+`settings.transformations`, whose entries are `move` (`dist || 1.0` times an *unnormalized*
+`dir`) and `rotateX|Y|Z` (degrees). Rotations are wrapped about where the mesh centre
+currently is — `wrapTransformation(mat, p)` is `T(p) · mat · T(-p)` — which for a freshly
+reset matrix is the origin, so the scripted default is a pure rotation about the origin.
+Measured: the unit square of `square_rotated` (`euler_angles = [20, 30, 0]`) gives
+`Surface`, `Wireframe` and `Edges` the same `matrixWorld` as `controls.mat`; an *invisible*
+object is skipped by `updateMatrixWorld` and keeps its identity matrix (`square_no_wireframe`),
+`Axes` carries the rotation but not the scale, and the `Colorbar` is untouched.
+
+The Euler orders are intrinsic turns about the fixed axes, so `'XYZ'` is `Rx @ Ry @ Rz` and
+`'YXZ'` is `Ry @ Rx @ Rz` — all six verified against the live renderer with the same
+`[10, 20, 30]` in `tests/gt/euler_orders.json` (`tools/probe_euler_orders.py`).
+
+The projection is three.js' `PerspectiveCamera.updateProjectionMatrix` with `left = -right`
+and `top = -bottom`, so with `t = tan(fov/2)`: `fx = 1/(aspect * t)`, `fy = 1/t`,
+`A = -(far+near)/(far-near)`, `B = -2 far near/(far-near)`, and the bottom row `(0, 0, -1, 0)`.
+Verified for the 894x594 canvas: `aspect = 1.505050505050505`, `fx = 1.8255051310470312`,
+`fy = 2.7474774194546225`, `A = -1.0202020202020203 = -101/99`, `B = -2.0202020202020203 =
+-200/99`, and the view matrix is exactly `T(0, 0, -3)`. `aspect` is `uniforms.aspect` too —
+the same number the thick-line shader uses to square up screen space — and it is the ratio of
+the *canvas buffer*, `renderer.domElement.width / .height`, which for a 900x600 viewport is
+894x594 (`calcSize()` subtracts a couple of pixels from `offsetWidth/offsetHeight`: 900x598).
+Pixel mapping is the plain GL viewport: `px = (x_ndc + 1) / 2 * width`,
+`py = (1 - y_ndc) / 2 * height` (y downwards), depth `z_ndc / 2 + 1/2`.
 
 Verified: the 900x600 ground truth puts the unit square at x 255..639, y 105..489 — 385 px,
-matching `1/(3*tan(20°))` exactly.
-
-Projection for the 894x594 canvas (measured): `fx = 1.8255051`, `fy = 2.7474774`, so
-`fx = fy/aspect`, `fy = 1/tan(fov/2)`. `aspect = w/h`.
+matching `1/(3*tan(20°))` exactly: the mesh has radius 1 at distance 3, so it fills ~92% of
+the vertical field.
 
 Background: **white** — `setClearColor(0xffffff, 1)`, and `getBackgroundColor()` returns
 white for a light theme (dark theme, i.e. light text, gives `0.1` grey). Antialiasing is
 MSAA (`antialias: true`), `devicePixelRatio` respected.
 
+Implemented in `src/ngsplot/camera.py`, with `tests/gt/camera.json` (`tools/probe_camera.py`)
+holding the object, view and projection matrices of all nine ground-truth scenes as the known
+answers.
 ## Overlays
 
 * **Colorbar**: `PlaneGeometry(1, 0.07)` translated `+0.5` in x, `MeshBasicMaterial`
