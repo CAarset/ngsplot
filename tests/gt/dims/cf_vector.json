@@ -1,0 +1,240 @@
+{
+ "name": "cf_vector",
+ "viewport": [
+  900,
+  600
+ ],
+ "draw_ok": true,
+ "render_data_summary": {
+  "Bezier_points": {
+   "b64_items": 6,
+   "floats_per_item": [
+    408,
+    408,
+    408,
+    204,
+    204,
+    204
+   ]
+  },
+  "Bezier_trig_points": {
+   "b64_items": 9,
+   "floats_per_item": [
+    136,
+    136,
+    136,
+    136,
+    136,
+    136,
+    136,
+    136,
+    136
+   ]
+  },
+  "autoscale": true,
+  "deformation": false,
+  "deformation_scale": 1.0,
+  "draw_surf": true,
+  "draw_vol": false,
+  "edges": {
+   "b64_items": 3,
+   "floats_per_item": [
+    64,
+    64,
+    64
+   ]
+  },
+  "fullscreen": false,
+  "funcdim": 2,
+  "funcmax": 1.0,
+  "funcmin": -1.0,
+  "gui_settings": {},
+  "mesh_center": {
+   "list_len": 3,
+   "items": [
+    0.5,
+    0.5,
+    1.1125369292536007e-308
+   ]
+  },
+  "mesh_dim": 2,
+  "mesh_radius": 0.7071067811865476,
+  "multidim_animate": false,
+  "multidim_interpolate": false,
+  "ngsolve_version": "6.2.2608",
+  "objects": {
+   "list_len": 0,
+   "items": []
+  },
+  "order2d": 2,
+  "order3d": 2,
+  "show_mesh": true,
+  "show_wireframe": true
+ },
+ "light_dir": [
+  0.30151134457776363,
+  0.30151134457776363,
+  0.9045340337332909
+ ],
+ "light_mat": [
+  0.3,
+  0.7,
+  10,
+  0.3
+ ],
+ "dark_backside": true,
+ "function_mode": 3,
+ "deformation": 0,
+ "colormap_min": 0,
+ "colormap_max": 1,
+ "colormap_size": [
+  1,
+  1
+ ],
+ "n_segments": 5,
+ "line_thickness": 0.008417508417508417,
+ "render_objects": [
+  {
+   "name": "Colorbar",
+   "visible": true,
+   "draw_range": Infinity,
+   "instance_count": null,
+   "numeric_uniforms": {
+    "colormap_min": 0,
+    "colormap_max": 1,
+    "function_mode": 3,
+    "aspect": 1.505050505050505,
+    "line_thickness": 0.008417508417508417,
+    "fieldline_thickness": 0,
+    "fieldline_phase": 0,
+    "fieldline_max_phase_dist": 0,
+    "fieldline_fade_dist": 0,
+    "fieldline_is_complex": 0,
+    "selected_face": -1
+   }
+  },
+  {
+   "name": "Axes",
+   "visible": true,
+   "draw_range": Infinity,
+   "instance_count": null,
+   "numeric_uniforms": {}
+  },
+  {
+   "name": "Edges",
+   "visible": true,
+   "draw_range": 30,
+   "instance_count": 16,
+   "numeric_uniforms": {
+    "colormap_min": 0,
+    "colormap_max": 1,
+    "function_mode": 3,
+    "aspect": 1.505050505050505,
+    "line_thickness": 0.008417508417508417,
+    "fieldline_thickness": 0,
+    "fieldline_phase": 0,
+    "fieldline_max_phase_dist": 0,
+    "fieldline_fade_dist": 0,
+    "fieldline_is_complex": 0,
+    "selected_face": -1,
+    "n_segments": 5
+   }
+  },
+  {
+   "name": "Wireframe",
+   "visible": true,
+   "draw_range": 6,
+   "instance_count": 102,
+   "numeric_uniforms": {
+    "colormap_min": 0,
+    "colormap_max": 1,
+    "function_mode": 3,
+    "aspect": 1.505050505050505,
+    "line_thickness": 0.008417508417508417,
+    "fieldline_thickness": 0,
+    "fieldline_phase": 0,
+    "fieldline_max_phase_dist": 0,
+    "fieldline_fade_dist": 0,
+    "fieldline_is_complex": 0,
+    "selected_face": -1,
+    "n_segments": 5,
+    "deformation": 0
+   }
+  },
+  {
+   "name": "Surface",
+   "visible": true,
+   "draw_range": 75,
+   "instance_count": 34,
+   "numeric_uniforms": {
+    "n_segments": 5,
+    "colormap_min": 0,
+    "colormap_max": 1,
+    "function_mode": 3,
+    "aspect": 1.505050505050505,
+    "line_thickness": 0.008417508417508417,
+    "fieldline_thickness": 0,
+    "fieldline_phase": 0,
+    "fieldline_max_phase_dist": 0,
+    "fieldline_fade_dist": 0,
+    "fieldline_is_complex": 0,
+    "selected_face": -1,
+    "deformation": 0
+   }
+  },
+  {
+   "name": "Vectors",
+   "visible": false,
+   "draw_range": Infinity,
+   "instance_count": Infinity,
+   "numeric_uniforms": {
+    "colormap_min": 0,
+    "colormap_max": 1,
+    "function_mode": 3,
+    "aspect": 1.505050505050505,
+    "line_thickness": 0.008417508417508417,
+    "fieldline_thickness": 0,
+    "fieldline_phase": 0,
+    "fieldline_max_phase_dist": 0,
+    "fieldline_fade_dist": 0,
+    "fieldline_is_complex": 0,
+    "selected_face": -1,
+    "n_segments": 5,
+    "deformation": 0
+   }
+  }
+ ],
+ "canvas": {
+  "x": 0,
+  "y": 0,
+  "w": 894,
+  "h": 594,
+  "buf_w": 894,
+  "buf_h": 594,
+  "dpr": 1
+ },
+ "labels": [
+  "tooltip",
+  "0.00",
+  "0.25",
+  "0.500",
+  "0.750",
+  "1.00",
+  "X",
+  "Y",
+  "Z"
+ ],
+ "png_stats": {
+  "mean_rgb": [
+   228.35,
+   219.57,
+   195.27
+  ],
+  "std_rgb": [
+   71.34,
+   76.14,
+   97.81
+  ],
+  "std_all": 83.75
+ }
+}

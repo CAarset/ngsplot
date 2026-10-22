@@ -1,0 +1,9 @@
+{
+ "name": "volume_cuts",
+ "viewport": [
+  900,
+  600
+ ],
+ "draw_ok": false,
+ "error": "Traceback (most recent call last):\n  File \"/home/aarset/Documents/ngsplot/tools/capture_dims.py\", line 286, in capture\n    data = SCENES[name]()\n  File \"/home/aarset/Documents/ngsplot/tools/capture_dims.py\", line 245, in <lambda>\n    \"volume_cuts\": lambda: _volume(objects=[ngs.x, ngs.y]),\n                           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/aarset/Documents/ngsplot/tools/capture_dims.py\", line 205, in _volume\n    return wg.Draw(gfu, show=False, **kwargs).GetData()\n           ~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/home/aarset/Documents/ngsplot/.venv/lib/python3.13/site-packages/netgen/webgui.py\", line 784, in Draw\n    scene = WebGLScene(obj, args, kwargs_with_defaults)\n  File \"/home/aarset/Documents/ngsplot/.venv/lib/python3.13/site-packages/netgen/webgui.py\", line 451, in __init__\n    self.widget.value = self.GetData()\n                        ~~~~~~~~~~~~^^\n  File \"/home/aarset/Documents/ngsplot/.venv/lib/python3.13/site-packages/netgen/webgui.py\", line 489, in GetData\n    d = _registered_draw_types[typ](self.obj, self.args, self.kwargs)\n  File \"/home/aarset/Documents/ngsplot/.venv/lib/python3.13/site-packages/ngsolve/webgui.py\", line 163, in GetData\n    d = BuildRenderData(mesh, cf, order=kwargs['order'], draw_surf=kwargs['draw_surf'], draw_vol=kwargs['draw_vol'], intpoints=kwargs['intpoints'], deformation=kwargs['deformation'], regions=regions, objects=kwargs['objects'], nodal_p1=kwargs['nodal_p1'], settings=kwargs['settings'])\n  File \"/home/aarset/Documents/ngsplot/.venv/lib/python3.13/site-packages/ngsolve/webgui.py\", line 295, in BuildRenderData\n    d['objects'].append(obj._GetWebguiData())\n                        ^^^^^^^^^^^^^^^^^^\nAttributeError: 'ngsolve.fem.CoefficientFunction' object has no attribute '_GetWebguiData'\n"
+}

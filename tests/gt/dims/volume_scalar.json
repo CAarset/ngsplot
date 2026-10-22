@@ -1,0 +1,245 @@
+{
+ "name": "volume_scalar",
+ "viewport": [
+  900,
+  600
+ ],
+ "draw_ok": true,
+ "render_data_summary": {
+  "Bezier_points": {
+   "b64_items": 3,
+   "floats_per_item": [
+    432,
+    432,
+    432
+   ]
+  },
+  "Bezier_trig_points": {
+   "b64_items": 6,
+   "floats_per_item": [
+    144,
+    144,
+    144,
+    144,
+    144,
+    144
+   ]
+  },
+  "autoscale": true,
+  "deformation": false,
+  "deformation_scale": 1.0,
+  "draw_surf": true,
+  "draw_vol": true,
+  "edges": {
+   "b64_items": 3,
+   "floats_per_item": [
+    96,
+    96,
+    96
+   ]
+  },
+  "fullscreen": false,
+  "funcdim": 1,
+  "funcmax": 6.0000000000000036,
+  "funcmin": 4.3853809472754945e-16,
+  "gui_settings": {},
+  "mesh_center": {
+   "list_len": 3,
+   "items": [
+    0.5,
+    0.5,
+    0.5
+   ]
+  },
+  "mesh_dim": 3,
+  "mesh_radius": 0.8660254037844386,
+  "multidim_animate": false,
+  "multidim_interpolate": false,
+  "ngsolve_version": "6.2.2608",
+  "objects": {
+   "list_len": 0,
+   "items": []
+  },
+  "order2d": 2,
+  "order3d": 2,
+  "points3d": {
+   "b64_items": 10,
+   "floats_per_item": [
+    112,
+    112,
+    112,
+    112,
+    112,
+    112,
+    112,
+    112,
+    112,
+    112
+   ]
+  },
+  "show_mesh": true,
+  "show_wireframe": true
+ },
+ "light_dir": [
+  0.30151134457776363,
+  0.30151134457776363,
+  0.9045340337332909
+ ],
+ "light_mat": [
+  0.3,
+  0.7,
+  10,
+  0.3
+ ],
+ "dark_backside": true,
+ "function_mode": 0,
+ "colormap_min": 4.3853809472754945e-16,
+ "colormap_max": 6.0000000000000036,
+ "colormap_size": [
+  1,
+  1
+ ],
+ "n_segments": 5,
+ "line_thickness": 0.008417508417508417,
+ "render_objects": [
+  {
+   "name": "Colorbar",
+   "visible": true,
+   "draw_range": Infinity,
+   "instance_count": null,
+   "numeric_uniforms": {
+    "colormap_min": 4.3853809472754945e-16,
+    "colormap_max": 6.0000000000000036,
+    "function_mode": 0,
+    "aspect": 1.505050505050505,
+    "line_thickness": 0.008417508417508417,
+    "fieldline_thickness": 0,
+    "fieldline_phase": 0,
+    "fieldline_max_phase_dist": 0,
+    "fieldline_fade_dist": 0,
+    "fieldline_is_complex": 0,
+    "selected_face": -1
+   }
+  },
+  {
+   "name": "Axes",
+   "visible": true,
+   "draw_range": Infinity,
+   "instance_count": null,
+   "numeric_uniforms": {}
+  },
+  {
+   "name": "Edges",
+   "visible": true,
+   "draw_range": 30,
+   "instance_count": 24,
+   "numeric_uniforms": {
+    "colormap_min": 4.3853809472754945e-16,
+    "colormap_max": 6.0000000000000036,
+    "function_mode": 0,
+    "aspect": 1.505050505050505,
+    "line_thickness": 0.008417508417508417,
+    "fieldline_thickness": 0,
+    "fieldline_phase": 0,
+    "fieldline_max_phase_dist": 0,
+    "fieldline_fade_dist": 0,
+    "fieldline_is_complex": 0,
+    "selected_face": -1,
+    "n_segments": 5
+   }
+  },
+  {
+   "name": "Clipping Plane",
+   "visible": false,
+   "draw_range": Infinity,
+   "instance_count": Infinity,
+   "numeric_uniforms": {
+    "colormap_min": 4.3853809472754945e-16,
+    "colormap_max": 6.0000000000000036,
+    "function_mode": 0,
+    "aspect": 1.505050505050505,
+    "line_thickness": 0.008417508417508417,
+    "fieldline_thickness": 0,
+    "fieldline_phase": 0,
+    "fieldline_max_phase_dist": 0,
+    "fieldline_fade_dist": 0,
+    "fieldline_is_complex": 0,
+    "selected_face": -1,
+    "n_segments": 5
+   }
+  },
+  {
+   "name": "Wireframe",
+   "visible": true,
+   "draw_range": 6,
+   "instance_count": 108,
+   "numeric_uniforms": {
+    "colormap_min": 4.3853809472754945e-16,
+    "colormap_max": 6.0000000000000036,
+    "function_mode": 0,
+    "aspect": 1.505050505050505,
+    "line_thickness": 0.008417508417508417,
+    "fieldline_thickness": 0,
+    "fieldline_phase": 0,
+    "fieldline_max_phase_dist": 0,
+    "fieldline_fade_dist": 0,
+    "fieldline_is_complex": 0,
+    "selected_face": -1,
+    "n_segments": 5
+   }
+  },
+  {
+   "name": "Surface",
+   "visible": true,
+   "draw_range": 75,
+   "instance_count": 36,
+   "numeric_uniforms": {
+    "n_segments": 5,
+    "colormap_min": 4.3853809472754945e-16,
+    "colormap_max": 6.0000000000000036,
+    "function_mode": 0,
+    "aspect": 1.505050505050505,
+    "line_thickness": 0.008417508417508417,
+    "fieldline_thickness": 0,
+    "fieldline_phase": 0,
+    "fieldline_max_phase_dist": 0,
+    "fieldline_fade_dist": 0,
+    "fieldline_is_complex": 0,
+    "selected_face": -1
+   }
+  }
+ ],
+ "canvas": {
+  "x": 0,
+  "y": 0,
+  "w": 894,
+  "h": 594,
+  "buf_w": 894,
+  "buf_h": 594,
+  "dpr": 1
+ },
+ "labels": [
+  "tooltip",
+  "4.4e-16",
+  "1.5",
+  "3.00",
+  "4.50",
+  "6.00",
+  "X",
+  "Y",
+  "Z"
+ ],
+ "png_stats": {
+  "mean_rgb": [
+   238.42,
+   232.71,
+   186.1
+  ],
+  "std_rgb": [
+   50.46,
+   55.28,
+   105.17
+  ],
+  "std_all": 78.12
+ }
+}
