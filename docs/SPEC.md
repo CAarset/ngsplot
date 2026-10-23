@@ -31,6 +31,11 @@ there is no C in the drawing path at all. The friction comes from Draw being a
   you get `RuntimeError: Cannot draw object of type GridFunction`; and
   `_get_draw_default_args` lives in `netgen.webgui` while `Draw`'s registration lives in
   `ngsolve.webgui`.
+* The keyword that picks which part of a value to colour reaches nothing at all. The lookup
+  asks `if "eval_" in kwargs` and the next line reads `kwargs["eval"]`
+  (`netgen/webgui.py:564-573`), so `Draw(gfu, eval="norm")` is silently dropped and
+  `Draw(gfu, eval_="norm")` dies with `KeyError: 'eval'`. The mode is otherwise a widget
+  control — which is to say that on the Python side it is unreachable.
 
 So: the clunkiness is *live-control GUI + racy async transport*, inherited from an
 interactive-tool heritage (Netgen's GUI) rather than from C.
@@ -373,3 +378,12 @@ and the `DEFORMATION` displacement of a mesh whose dimension matches its functio
 `function_mode` selects the plotted component (`GetValue`): 0..2 = component, 3 = length,
 5/6 = complex real/imag rotated by `complex_scale`. `>= 4` components are reduced to
 `Norm(cf)` on the Python side with a printed warning. Modes 4/7/8 are pick/locate passes.
+
+How the mode is settled, in order of who writes it (`gui.ts:529-571`): `initComplex` seeds the
+panel at 5 for a complex value — into `settings_default` as well, so a payload that brings its
+own `Colormap` section inherits it — and at 3 for a two- or three-component one, into the live
+settings only. A `Colormap` section that names `eval` therefore survives only where nothing
+overwrites it, which is a scalar function; and `data.eval` at the top of the payload is written
+last of all, over both. A flat `eval` beside the sections is not a name `updateSettings` folds,
+so nothing reads it. Since `Draw`'s own spelling is dead (above), a script reaches the mode
+through `settings={"Colormap": {"eval": …}}`, or, in ngsplot, straight to the renderer.
