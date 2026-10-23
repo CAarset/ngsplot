@@ -95,6 +95,24 @@ def polygon_offset(x, y, z, *, factor=POLYGON_OFFSET_FACTOR, units=POLYGON_OFFSE
     return factor * slope + units * DEPTH_RESOLUTION
 
 
+def _polygon_offsets(x, y, z, *, factor=POLYGON_OFFSET_FACTOR, units=POLYGON_OFFSET_UNITS):
+    """:func:`polygon_offset` for a stack of ``(n, 3)`` window-space triangles at once.
+
+    Row for row the same arithmetic as the one above: the same differences, the same
+    determinant, the same two quotients in the same order.  A triangle of no screen area, or
+    of a determinant that is no number to order against, gets no slope; a slope that comes
+    out of an overflowed depth comes out of here as no number too, which is what the one
+    above returns and what puts the whole triangle out of the depth test.
+    """
+    dx1, dy1, dz1 = x[:, 0] - x[:, 2], y[:, 0] - y[:, 2], z[:, 0] - z[:, 2]
+    dx2, dy2, dz2 = x[:, 1] - x[:, 2], y[:, 1] - y[:, 2], z[:, 1] - z[:, 2]
+    det = dx1 * dy2 - dx2 * dy1
+    with np.errstate(divide="ignore", invalid="ignore"):
+        dz_dy = (dz1 * dy2 - dz2 * dy1) / det
+        dz_dx = (dx1 * dz2 - dx2 * dz1) / det
+    slope = np.where(np.isfinite(det) & (det != 0.0), np.maximum(abs(dz_dy), abs(dz_dx)), 0.0)
+    return factor * slope + units * DEPTH_RESOLUTION
+
 
 def sample_offsets(samples):
     """Normalise the ``samples`` of a :class:`Canvas` to a list of ``(dx, dy)`` offsets.
@@ -238,6 +256,21 @@ def _fragment_colour(value, normal, pos, inside, *, function_mode, complex_scale
     return lit.reshape(rgb.shape)
 
 
+#: how much canvas one primitive of a shaded stack has to be worth before the per-primitive
+#: sweep of :func:`_paint_triangle` is handed the stack instead of the tiles of
+#: :func:`_paint_stack`.  The batch pays for every tile a box touches, which for a triangle
+#: wider than a tile is several times the area of the triangle; the loop pays a dozen numpy calls
+#: per primitive and for no pixel twice.  The boxes of a mesh that fills the frame add up to
+#: about one canvas whatever its fineness, so the batch's cost is set by the picture and the
+#: loop's by the number of primitives in it, and the two cross at a fixed number of canvas
+#: pixels per primitive.  Measured in one process, best of three, on :mod:`tools.bench_paint`
+#: meshes at 900x600 and on the recorded pictures: the loop is 1.08x behind at 415 pixels per
+#: primitive (1300 of a square at maxh 0.2) and 1.19x ahead at 600 (900 of a cube at maxh 0.5),
+#: and on ``mesh_only`` -- 52 triangles, 10212 pixels each -- it is twice ahead of a batch that
+#: sweeps each of them over sixteen tiles.
+_STACK_LOOP_AREA = 512
+
+
 def paint_surface(canvas, cam, order, ctrl, *, vmin, vmax, pal=None, n_segments=N_SEGMENTS,
                   vectors=None, deformation=0.0, mode="none", function_mode=0.0,
                   complex_scale=(1.0, 0.0), vertex_normals=None, function_values=True,
@@ -255,6 +288,10 @@ def paint_surface(canvas, cam, order, ctrl, *, vmin, vmax, pal=None, n_segments=
     :func:`polygon_offset`, which the surface material alone asks for and which is applied
     to every sub-triangle here, not a different comparison.  Mode ``8``, which colours by
     depth for debugging, is not implemented.
+
+    The sheet goes to :func:`_paint_stack` unless it is too coarse for a tile sweep to pay for
+    itself, in which case :func:`_paint_triangle` draws it a triangle at a time; the two draw the
+    same picture, which is what :data:`_STACK_LOOP_AREA` is free to choose between them on.
     """
     function_mode = float(function_mode)
     if function_mode == 8.0:
@@ -283,16 +320,58 @@ def paint_surface(canvas, cam, order, ctrl, *, vmin, vmax, pal=None, n_segments=
     usable = (np.isfinite(px) & np.isfinite(py) & np.isfinite(depth) & np.isfinite(w) & (w > 0.0)
               & ~np.any(np.isnan(value), axis=-1))
 
-    for e in range(ne):
-        for tri in bezier.subtriangles(n_segments):
-            if not np.all(usable[e, tri]):
-                continue
-            _paint_triangle(
-                canvas, px[e, tri], py[e, tri], w[e, tri], depth[e, tri], p_view[e, tri],
-                n_view[e, tri], value[e, tri], vmin=vmin, vmax=vmax, pal=pal,
-                function_mode=function_mode, complex_scale=complex_scale,
-                function_values=function_values, dark_backside=dark_backside,
-                skip_face_check=skip_face_check, less_equal=less_equal)
+    # The whole sheet is one stack, in the order an instanced mesh draws it: instance by
+    # instance, and within an instance in the order subtriangles returns.  That order is not
+    # a detail -- it is what settles every tie between two sub-triangles that meet on an edge,
+    # which for a surface this fine is most of the ink on the sheet.
+    tris = bezier.subtriangles(n_segments)
+    e, ti = np.nonzero(np.all(usable[:, tris], axis=-1))
+    corner = tris[ti]                                    # the three lattice corners of each
+    e = e[:, None]
+    x, y, z, w = (a[e, corner] for a in (px, py, depth, w))
+    p_view, n_view, val = (a[e, corner] for a in (p_view, n_view, value))
+
+    # gl_FrontFacing counts counter-clockwise in window space, whose y grows upwards, so
+    # clockwise -- a positive cross product here -- in the y-down pixel coordinates.
+    # function.frag negates the normal for every back face and only calls it "inside", which
+    # is what dims it, unless the program was compiled with SKIP_FACE_CHECK.
+    back = ((x[:, 1] - x[:, 0]) * (y[:, 2] - y[:, 0])
+            - (x[:, 2] - x[:, 0]) * (y[:, 1] - y[:, 0]) > 0.0)
+    face_check = not skip_face_check
+
+    def shade(fields, constants):
+        # colour and light come from the varyings at the pixel centre, once for the whole
+        # pixel and not once per sample, as _paint_triangle explains
+        val, pos, normal = fields
+        (back,) = constants
+        return _fragment_colour(val, np.where(back[:, None], -normal, normal), pos,
+                                back & face_check, function_mode=function_mode,
+                                complex_scale=complex_scale, function_values=function_values,
+                                vmin=vmin, vmax=vmax, pal=pal, dark_backside=dark_backside)
+
+    if x.shape[0] * _STACK_LOOP_AREA < canvas.width * canvas.height:
+        # A stack too coarse to amortise a tile sweep: one triangle at a time, which is what
+        # :func:`_paint_triangle` is, and the reason it is kept.  The order is the stack's, so a
+        # pixel two triangles both want is tested twice instead of sorted once -- against what
+        # the earlier one left, which gives the later one the tie under LessEqualDepth and the
+        # earlier one under LessDepth, the same two outcomes _resolve picks from a stack.
+        for here in range(x.shape[0]):
+            _paint_triangle(canvas, x[here], y[here], w[here], z[here],
+                            p_view[here], n_view[here], val[here], vmin=vmin, vmax=vmax, pal=pal,
+                            function_mode=function_mode, complex_scale=complex_scale,
+                            function_values=function_values, dark_backside=dark_backside,
+                            skip_face_check=skip_face_check, less_equal=less_equal)
+        return canvas
+
+    # every fragment of the surface is pushed away from the camera by a polygon offset, which
+    # the surface material is the only one to ask for (three/mesh.ts:65-67).  It is what makes
+    # the wireframe, which is generated in the surface itself, pass the depth test: measured
+    # on square_scalar.png, a wireframe line and the surface under it differ in window depth
+    # by at most 1.1102230246251565e-16, so the comparison is decided by rounding noise, which
+    # throws away nearly a quarter of the ink -- 3554 units of it counted inside one box of
+    # the surface against the 4405 of the recording.
+    _paint_stack(canvas, x, y, w, z, varyings=(val, p_view, n_view), attrs=(back,),
+                 shade=shade, less_equal=less_equal, offset=True)
     return canvas
 
 
@@ -430,6 +509,421 @@ def _write(canvas, plane, rows, cols, rgb, depth):
     canvas.depths[plane, rows, cols] = depth
 
 
+# --------------------------------------------- the stack, binned into tiles and windows
+
+#: how many samples one chunk -- the primitives of one tile, or of one window, swept together
+#: -- is walked over.  A chunk is a single array of ``(primitives, rows, columns, sample
+#: planes)``, walked over a dozen times by the barycentrics, the depth and the depth test, so
+#: what matters is that one of its temporaries is small enough that the next one finds it in
+#: cache: a megabyte each, which on the meshes of :mod:`tools.bench_paint` is the fastest of
+#: the sizes tried, by a few percent over either a sixteenth or a sixteenth of a gigabyte.
+_STACK_SAMPLES = 1 << 16
+
+#: the tile sides :func:`_stack_tiles` will use, in pixels.  The floor is what keeps the
+#: tiles -- and with them the numpy calls -- few on a fine mesh, where a triangle of a few
+#: pixels is swept over its tile either way.  The ceiling is what keeps a triangle whose box
+#: spans the frame, which a volume shows plenty of, from being swept once over all of it.
+_STACK_TILE_MIN, _STACK_TILE_MAX = 4, 32
+
+#: the largest window :func:`_flat_windows` sweeps a primitive over at a time, in pixels, and
+#: its number of bits.  A box coarser than that is swept as several windows, which is what
+#: keeps the array of a chunk to a few tens of megabytes however far a ribbon reaches.  A
+#: power of two, so that a window is a rounding of the sides of a box and not a search.
+_STACK_WINDOW = 64
+_STACK_WINDOW_BITS = _STACK_WINDOW.bit_length() - 1
+
+#: how many winning samples :func:`_paint_stack` collects before it colours and writes
+#: them; the colouring of the surface is a lighting call, which wants rows to chew on.
+_STACK_WINNERS = 1 << 15
+
+
+def _resolve(keys, depth, index, less_equal):
+    """Which of the candidates for one sample the depth test keeps.
+
+    ``keys`` names the sample every candidate wants to write, ``depth`` is its window
+    depth and ``index`` its place in the stack, the three of them the same length.  The
+    test keeps the nearer fragment, and on an exact depth it keeps the fragment written
+    last where the test is ``LessEqualDepth`` -- what the renderer sets,
+    ``three/mesh.ts:57`` -- and the one written first where it is ``LessDepth``.  One
+    sort does both: order by sample, then by depth, then by place in the stack, and take
+    the first candidate of every run of a sample.  Nothing with a depth that cannot be
+    ordered against another reaches here, the comparison having already failed it.
+    """
+    order = np.lexsort((-index if less_equal else index, depth, keys))
+    ranked = keys[order]
+    first = np.r_[True, ranked[1:] != ranked[:-1]]
+    return order[first]
+
+
+def _stack_tiles(canvas, i0, i1, j0, j1):
+    """Yield ``(rows, columns, primitives)`` for the tiles a stack of boxes overlaps.
+
+    ``i0``, ``i1``, ``j0`` and ``j1`` are the pixel rows and columns of each primitive's
+    bounding box, clipped to the canvas and half-open.  A primitive is listed in every
+    tile its box touches, and that duplication is what makes the sweep vectorizable: the
+    primitives of one tile are few enough to be swept as a single array over the tile's
+    own rows and columns, and a tile's samples belong to that tile alone, so tiles neither
+    conflict nor depend on one another and may be swept in any order.
+
+    The side of a tile is the power-of-two size class the box fits into, so a primitive
+    reaches at most two tiles per axis and the box one array sweeps is at most twice the
+    primitive's own per axis -- four times the arithmetic at its worst, against the
+    per-primitive call it would otherwise cost.  Boxes finer than that get the floor of
+    :data:`_STACK_TILE_MIN`, which buys fewer tiles with a wider box, and a box as coarse as
+    the canvas the cap, which is the one case where a primitive reaches more than two tiles
+    per axis: the duplication of a triangle that spans the frame is cheaper than sweeping the
+    frame over it.  Tiles come out in a fixed order and their primitives in stack order,
+    which is the order depth ties go in.
+    """
+    side = np.maximum(i1 - i0, j1 - j0)
+    tile = np.clip(np.left_shift(1, np.ceil(np.log2(side)).astype(np.int64)),
+                   _STACK_TILE_MIN, _STACK_TILE_MAX)
+    tiles, group = np.unique(tile, return_inverse=True)
+    for number, side in enumerate(tiles):
+        (part,) = np.nonzero(group == number)
+        ci0, cj0 = i0[part] // side, j0[part] // side
+        span_i = (i1[part] - 1) // side - ci0 + 1
+        span_j = (j1[part] - 1) // side - cj0 + 1
+        ncol = (canvas.width - 1) // side + 1
+        cells, prims = [], []
+        for di in range(int(span_i.max())):
+            for dj in range(int(span_j.max())):
+                (hit,) = np.nonzero((di < span_i) & (dj < span_j))
+                if hit.size:
+                    cells.append((ci0[hit] + di) * ncol + cj0[hit] + dj)
+                    prims.append(part[hit])
+        cells = np.concatenate(cells)
+        prims = np.concatenate(prims)
+        # by tile, and within it by stack place: the order a sequential painter would use
+        order = np.lexsort((prims, cells))
+        cells, prims = cells[order], prims[order]
+        starts = np.r_[0, np.flatnonzero(cells[1:] != cells[:-1]) + 1]
+        for a, b in zip(starts, np.r_[starts[1:], cells.size]):
+            cell = int(cells[a])
+            ra, ca = (cell // ncol) * side, (cell % ncol) * side
+            yield ((ra, min(ra + side, canvas.height)),
+                   (ca, min(ca + side, canvas.width)), prims[a:b])
+
+
+def _flat_windows(canvas, i0, i1, j0, j1):
+    """Yield ``(rows, columns, window rows, window columns, primitives)``, a class at a time.
+
+    The four box arrays of :func:`_stack_tiles`, and the same job: hand the sweep the
+    primitives that share a rectangle of the canvas to walk, so that one array walks them.
+    The rectangle is a window of the primitive's own box here rather than a tile of the
+    canvas, and the two sides of a window are rounded up separately, so that a ribbon one
+    pixel long is swept over a pixel and not over the square of the coarsest box of the call:
+    a ribbon of a pixel swept over the :data:`_STACK_TILE_MIN` floor of a tile asks for two
+    hundred pixels of arithmetic for the one it paints, which is the whole cost of a wireframe.
+
+    Windows of one shape are yielded together, which is what lets their arrays share a
+    length.  A box coarser than :data:`_STACK_WINDOW` is handed out as several windows, and
+    the last window of an axis is pulled back to the edge of the canvas so that every window
+    lies inside the canvas: the sweep of a window asks no pixel whether it is off it.  Where
+    a window is pulled back onto its neighbour a pixel of the box is swept twice, and the two
+    answers are the same bits, so it is :func:`_resolve` that is left to pick one.
+
+    That a box may be cut up, and that the windows of a class come out in no particular
+    order, is owed to the stack being a flat one of a single colour: whichever of two
+    primitives wins a pixel, the pixel takes the colour of the stack, and only a depth could
+    tell them apart.  :func:`_stack_tiles` hands the primitives of a tile in stack order
+    because there two of them can tie over one pixel and colour it differently.
+    """
+    cap_i = min(_STACK_WINDOW_BITS, int(np.log2(canvas.height)))
+    cap_j = min(_STACK_WINDOW_BITS, int(np.log2(canvas.width)))
+    bits_i = np.clip(np.ceil(np.log2(np.maximum(i1 - i0, 1))).astype(np.int64), 0, cap_i)
+    bits_j = np.clip(np.ceil(np.log2(np.maximum(j1 - j0, 1))).astype(np.int64), 0, cap_j)
+    key = (bits_i << 8) | bits_j
+    order = np.argsort(key, kind="stable")
+    keys = key[order]
+    starts = np.r_[0, np.flatnonzero(keys[1:] != keys[:-1]) + 1]
+    for a, b in zip(starts, np.r_[starts[1:], keys.size]):
+        part, number = order[a:b], int(keys[a])
+        h, wd = 1 << (number >> 8), 1 << (number & 255)
+        span_i = -((i1[part] - i0[part]) // -h)
+        span_j = -((j1[part] - j0[part]) // -wd)
+        rows = np.minimum(i0[part][:, None] + h * np.arange(span_i.max()),
+                          canvas.height - h)
+        columns = np.minimum(j0[part][:, None] + wd * np.arange(span_j.max()),
+                             canvas.width - wd)
+        grid = ((np.arange(rows.shape[1])[None, :, None] < span_i[:, None, None])
+                & (np.arange(columns.shape[1])[None, None, :] < span_j[:, None, None]))
+        k, u, v = np.nonzero(grid)
+        yield h, wd, rows[k, u], columns[k, v], part[k]
+
+
+def _interpolate(field, l0, l1, l2, wc, iw):
+    """The value of a varying at the pixel centre of every row of a list of winners.
+
+    ``field`` is ``(n, 3, k)``, the three corners' values of one varying for each of the
+    primitives that won; ``l0``, ``l1``, ``l2`` and ``wc`` are the barycentrics and the
+    share of ``1/w`` of the pixel centre it won, and ``iw`` the corners' ``1/w``.  This is
+    :func:`_sweep`'s ``interp`` with the primitive as the row instead of the pixel, term for
+    term, so that a colour comes out of it the same as out of the fragment program.
+    """
+    out = (l0 * iw[:, 0])[:, None] * field[:, 0] + (l1 * iw[:, 1])[:, None] * field[:, 1]
+    return (out + (l2 * iw[:, 2])[:, None] * field[:, 2]) * wc[:, None]
+
+
+def _paint_stack(canvas, x, y, w, z, *, rgb=None, varyings=(), attrs=(), shade=None,
+                 less_equal=True, offset=False):
+    """Sweep a whole stack of window-space triangles over the canvas, a batch at a time.
+
+    ``x``, ``y``, ``w`` and ``z`` are ``(n, 3)``: row ``k`` holds primitive ``k``, in the
+    order it is drawn, and its three corners' pixel columns, pixel rows, clip weights and
+    window depths.  The depth test is the ``less_equal`` of :func:`_sweep`.
+
+    A flat stack paints in the colour ``rgb``, one for all of it or one per primitive.  A
+    shaded stack paints with ``shade``, which is given the ``varyings`` and the ``attrs`` of
+    the primitives that won the pixels and answers ``(n, 3)`` of colour: ``varyings`` are
+    ``(n, 3, k)`` per corner, interpolated perspective-correctly, and ``attrs`` ``(n, k)``
+    per primitive, gathered.  One of the two, and only one, says which stack this is.
+
+    This is :func:`_paint_flat` and :func:`_paint_triangle` for a great many primitives at
+    once, pixel for pixel.  The arithmetic of :func:`_sweep` is reproduced term for term so
+    that the depths come out the same bits and a tie lands where the sequential painter puts
+    it; what changes is only *when* it is evaluated: over one rectangle of the canvas for all
+    the primitives that reach it, instead of over one primitive for the whole canvas.  A sample
+    lies in one tile only, and every primitive covering it is listed in that tile, so
+    resolving the stack per tile resolves it; the primitives of a tile are then ordered by
+    depth and stack place, which is what the depth test would have decided write by write.
+
+    A stack of one colour for all of it is binned by the boxes of its primitives instead of by
+    the canvas (:func:`_flat_windows`), the two binnings paying for different things.  A tile
+    makes a primitive pay for a rectangle of the canvas whether or not it covers it, so a
+    ribbon a pixel wide that lands in the tile of a coarse triangle pays for the square of
+    that triangle; a window makes a primitive pay for a rectangle of its own box, which is
+    what a wireframe of a 900-element mesh spends most of its time on.  What a window costs is
+    a sweep that may hand the windows of one primitive out in any order, and one colour for
+    the stack is what pays for that: a candidate the depth test of a window throws away is
+    thrown away against a fragment already written to that sample, which is therefore nearer,
+    or of the same depth -- and a tie of the same depth leaves the same depth bits and, one
+    colour serving both fragments, the same colour, so which of the two a sequential painter
+    would have kept is nothing the canvas can show.  A colour per primitive makes a tie
+    visible, so such a stack stays on the tiles, where the order of the sweep is the order of
+    the draw.
+
+    The varyings are interpolated for the winners of that resolution only.  A fragment
+    program that lost the depth test never ran, and a varying interpolated for it would be
+    arithmetic thrown away -- ten times over, by the usual depth complexity -- as well as
+    colouring a pixel with a triangle that is not the one visible.
+
+    ``offset`` asks for the polygon offset of the surface material, every primitive of the
+    stack pushed away from the camera by the slope of its own plane :func:`polygon_offset`
+    measures.  It belongs to the pass and not to the primitive, which is how the renderer
+    sets it: the surface material asks for it and the line materials do not.
+    """
+    if (shade is None) == (rgb is None):
+        raise ValueError("a stack is either flat, with rgb, or shaded, with shade")
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    w = np.asarray(w, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    count = x.shape[0]
+    if count == 0:
+        return canvas
+    colour = (None if shade is not None
+              else np.broadcast_to(np.asarray(rgb, dtype=np.float64), (count, 3)))
+    # One colour for the whole stack, as opposed to one per primitive: the difference decides
+    # whether a tie between two primitives over one pixel can be seen at all, and with it how
+    # far the sweep may reorder and cut up the stack.  See :func:`_flat_windows`.
+    flat = colour is not None and np.ndim(rgb) == 1
+
+    # The same primitives survive here as survive _sweep: a determinant of no area or of
+    # no finite value, and a bounding box the canvas edge clips away.  A corner that is
+    # not a number takes the determinant with it, so it is culled here as it is there.
+    den = ((y[:, 1] - y[:, 2]) * (x[:, 0] - x[:, 2])
+           + (x[:, 2] - x[:, 1]) * (y[:, 0] - y[:, 2]))
+    reach = canvas.reach
+    with np.errstate(invalid="ignore"):
+        i0 = np.maximum(np.floor(y.min(axis=1) - reach), 0).astype(np.int64)
+        i1 = np.minimum(np.ceil(y.max(axis=1) + reach), canvas.height).astype(np.int64)
+        j0 = np.maximum(np.floor(x.min(axis=1) - reach), 0).astype(np.int64)
+        j1 = np.minimum(np.ceil(x.max(axis=1) + reach), canvas.width).astype(np.int64)
+    (part,) = np.nonzero(np.isfinite(den) & (den != 0.0) & (i0 < i1) & (j0 < j1))
+    if part.size == 0:
+        return canvas
+    x, y, w, z, den = (a[part] for a in (x, y, w, z, den))
+    if offset:
+        # the push belongs to the plane, so the three corners taking it is the same as every
+        # fragment of the triangle taking it -- and it is measured before it is applied, as
+        # _paint_triangle measures it
+        z = z + _polygon_offsets(x, y, z)[:, None]
+    if colour is not None:
+        colour = colour[part]
+    i0, i1, j0, j1 = i0[part], i1[part], j0[part], j1[part]
+    # the varyings and the attributes of the primitives, as those of the survivors: they are
+    # asked for by the stack place of a winner, which is a place in the compacted stack now
+    varyings = tuple(np.asarray(f, dtype=np.float64)[part] for f in varyings)
+    attrs = tuple(np.asarray(a)[part] for a in attrs)
+
+    # the sample offsets, lined up with the last axis of the swept array
+    offsets = np.asarray(canvas.offsets(), dtype=np.float64)
+    dx = offsets[:, 0][None, None, None, :]
+    dy = offsets[:, 1][None, None, None, :]
+    planes = len(offsets)
+
+    names = ["plane", "row", "col", "depth", "index"]
+    if shade is not None:
+        # the colour of a fragment, kept for every sample of it: the fragment program runs
+        # once for the pixel and not once for the sample, so a primitive and a pixel have
+        # one colour to shade and four samples to put it in
+        names += ["paint"]
+    won = {name: [] for name in names}
+    held = 0
+
+    def flush():
+        """Write what the tiles have won so far, once, with a sample's ties resolved."""
+        nonlocal held
+        if not held:
+            return
+        got = {name: np.concatenate(won[name]) for name in won}
+        keys = ((got["plane"] * canvas.height + got["row"]) * canvas.width
+                + got["col"])
+        keep = _resolve(keys, got["depth"], got["index"], less_equal)
+        plane, row = got["plane"][keep], got["row"][keep]
+        col, depth = got["col"][keep], got["depth"][keep]
+        index = got["index"][keep]
+        if shade is None:
+            paint = colour[index]
+        else:
+            # the colour of a winning sample was shaded with its primitive's own fragment,
+            # in the chunk that found the sample, and is only gathered here
+            paint = got["paint"][keep]
+        canvas.planes[plane, row, col, :3] = paint
+        canvas.planes[plane, row, col, 3] = 1.0
+        canvas.depths[plane, row, col] = depth
+        for rows in won.values():
+            rows.clear()
+        held = 0
+
+    if flat:
+        # A flat stack of a single colour, swept each primitive over a window of its own box.
+        # The tile is the wrong shape for a line pass: a ribbon a pixel wide is swept over
+        # the tile of the canvas it lies in, two orders of magnitude more arithmetic than the
+        # pixel asks for, and a wireframe is nothing but those.  A window costs what its box
+        # costs, and a primitive is cut into as many windows as it needs and swept in whatever
+        # order they come out, neither of which a stack of one colour can see: see
+        # :func:`_flat_windows`.
+        depths = canvas.depths.transpose(1, 2, 0)
+        for h, wd, window_r, window_c, prims in _flat_windows(canvas, i0, i1, j0, j1):
+            step = max(1, _STACK_SAMPLES // (h * wd * planes))
+            for a in range(0, prims.size, step):
+                here = prims[a:a + step]
+                wr, wc = window_r[a:a + step], window_c[a:a + step]
+                tx, ty, tw, tz = x[here], y[here], w[here], z[here]
+                # _sweep's two slopes per barycentric, vertex 2 the origin of the window
+                den_inv = 1.0 / den[here]
+                b0 = (ty[:, 1] - ty[:, 2]) * den_inv
+                c0 = (tx[:, 2] - tx[:, 1]) * den_inv
+                b1 = (ty[:, 2] - ty[:, 0]) * den_inv
+                c1 = (tx[:, 0] - tx[:, 2]) * den_inv
+                gx = (wc[:, None] + np.arange(wd)) + 0.5 - tx[:, 2][:, None]
+                gy = (wr[:, None] + np.arange(h)) + 0.5 - ty[:, 2][:, None]
+                l0 = (b0[:, None] * gx)[:, None, :] + (c0[:, None] * gy)[:, :, None]
+                l1 = (b1[:, None] * gx)[:, None, :] + (c1[:, None] * gy)[:, :, None]
+                iw = 1.0 / tw
+                zn = tz * iw
+
+                # all four sample planes along the last axis, as over a tile
+                s0 = l0[..., None] + b0[:, None, None, None] * dx + c0[:, None, None, None] * dy
+                s1 = l1[..., None] + b1[:, None, None, None] * dx + c1[:, None, None, None] * dy
+                s2 = 1.0 - s0 - s1
+                corner = (len(here), 1, 1, 1)
+                depth = ((s0 * zn[:, 0].reshape(corner) + s1 * zn[:, 1].reshape(corner)
+                          + s2 * zn[:, 2].reshape(corner))
+                         / (s0 * iw[:, 0].reshape(corner) + s1 * iw[:, 1].reshape(corner)
+                            + s2 * iw[:, 2].reshape(corner)))
+                keep = (s0 >= 0.0) & (s1 >= 0.0) & (s2 >= 0.0)
+                del s0, s1, s2
+                # the window's rows and columns, which lie inside the canvas by construction
+                rows_at = wr[:, None] + np.arange(h)
+                cols_at = wc[:, None] + np.arange(wd)
+                old = depths[rows_at[:, :, None], cols_at[:, None, :]]
+                hit = keep & (depth <= old if less_equal else depth < old)
+                taken = np.nonzero(hit)
+                if not taken[0].size:
+                    continue
+                won["plane"].append(taken[3])
+                won["row"].append(rows_at[taken[0], taken[1]])
+                won["col"].append(cols_at[taken[0], taken[2]])
+                won["depth"].append(depth[taken])
+                won["index"].append(here[taken[0]])
+                held += taken[0].size
+                if held >= _STACK_WINNERS:
+                    flush()
+        flush()
+        return canvas
+
+    for (ra, rb), (ca, cb), tile in _stack_tiles(canvas, i0, i1, j0, j1):
+        # primitives of this tile at a time, few enough to keep the arrays small
+        step = max(1, _STACK_SAMPLES // ((rb - ra) * (cb - ca) * planes))
+
+        for a in range(0, tile.size, step):
+            here = tile[a:a + step]
+            tx, ty, tw, tz = x[here], y[here], w[here], z[here]
+            # _sweep's two slopes per barycentric, vertex 2 the origin of the tile
+            den_inv = 1.0 / den[here]
+            b0 = (ty[:, 1] - ty[:, 2]) * den_inv
+            c0 = (tx[:, 2] - tx[:, 1]) * den_inv
+            b1 = (ty[:, 2] - ty[:, 0]) * den_inv
+            c1 = (tx[:, 0] - tx[:, 2]) * den_inv
+            gx = np.arange(ca, cb) + 0.5 - tx[:, 2][:, None]
+            gy = np.arange(ra, rb) + 0.5 - ty[:, 2][:, None]
+            l0 = (b0[:, None] * gx)[:, None, :] + (c0[:, None] * gy)[:, :, None]
+            l1 = (b1[:, None] * gx)[:, None, :] + (c1[:, None] * gy)[:, :, None]
+            iw = 1.0 / tw
+            zn = tz * iw
+
+            if shade is not None:
+                # the pixel centre's own barycentrics and share of 1/w, which is where the
+                # fragment program runs: once per pixel, not once per sample
+                l2 = 1.0 - l0 - l1
+                wc = 1.0 / (l0 * iw[:, 0][:, None, None] + l1 * iw[:, 1][:, None, None]
+                            + l2 * iw[:, 2][:, None, None])
+
+            # all four sample planes along the last axis: a sample's barycentrics are the
+            # pixel centre's, swept by these same slopes, plus the plane's own offset
+            s0 = l0[..., None] + b0[:, None, None, None] * dx + c0[:, None, None, None] * dy
+            s1 = l1[..., None] + b1[:, None, None, None] * dx + c1[:, None, None, None] * dy
+            s2 = 1.0 - s0 - s1
+            corner = (len(here), 1, 1, 1)
+            depth = ((s0 * zn[:, 0].reshape(corner) + s1 * zn[:, 1].reshape(corner)
+                      + s2 * zn[:, 2].reshape(corner))
+                     / (s0 * iw[:, 0].reshape(corner) + s1 * iw[:, 1].reshape(corner)
+                        + s2 * iw[:, 2].reshape(corner)))
+            keep = (s0 >= 0.0) & (s1 >= 0.0) & (s2 >= 0.0)
+            del s0, s1, s2
+            old = canvas.depths[:, ra:rb, ca:cb].transpose(1, 2, 0)[None]
+            hit = keep & (depth <= old if less_equal else depth < old)
+            taken = np.nonzero(hit)
+            if not taken[0].size:
+                continue
+            won["plane"].append(taken[3])
+            won["row"].append(taken[1] + ra)
+            won["col"].append(taken[2] + ca)
+            won["depth"].append(depth[taken])
+            won["index"].append(np.broadcast_to(here[:, None, None, None],
+                                                hit.shape)[taken])
+            if shade is not None:
+                # one fragment per primitive and pixel, wherever the primitive wins at least
+                # one of its four samples: the fragment program runs for the pixel, at its
+                # centre, so the samples of one fragment are one lighting call and not four
+                whole = np.nonzero(np.any(hit, axis=3))
+                place = np.full(hit.shape[:3], -1, dtype=np.int64)
+                place[whole] = np.arange(whole[0].size)
+                at = here[whole[0]]
+                fields = tuple(_interpolate(f[at], l0[whole], l1[whole], l2[whole], wc[whole],
+                                            iw[whole[0]]) for f in varyings)
+                paint = shade(fields, tuple(a[at] for a in attrs))
+                won["paint"].append(paint[place[taken[:3]]])
+            held += taken[0].size
+            if held >= _STACK_WINNERS:
+                flush()
+    flush()
+    return canvas
+
+
 def _samples(order, ctrl, t, *, vectors=None, deformation=0.0, mode="none",
              function_mode=0.0, complex_scale=(1.0, 0.0)):
     """Position and value of ``ctrl``'s instances at the parameter values ``t``."""
@@ -470,10 +964,19 @@ def _project(canvas, cam, points):
                             canvas.width, canvas.height)
 
 
+def _projects(x, y, depth, w, axis=-1):
+    """Which instances project at all, along ``axis`` of the window space of their samples.
+
+    The same test as :func:`_usable`, left standing per instance instead of folded into one
+    answer, because a batch drops the broken rows and keeps the rest; see there.
+    """
+    return np.all(np.isfinite(x) & np.isfinite(y) & np.isfinite(depth) & np.isfinite(w)
+                  & (w > 0.0), axis=axis)
+
+
 def _usable(x, y, depth, w):
     """Whether a whole instance projects: the vertex program keeps none of a broken one."""
-    return bool(np.all(np.isfinite(x) & np.isfinite(y) & np.isfinite(depth) & np.isfinite(w)
-                       & (w > 0.0)))
+    return bool(_projects(x, y, depth, w))
 
 
 def _rail(px, py, qx, qy, half_width):
@@ -499,6 +1002,9 @@ def _ribbon(canvas, x, y, w, z, nx, ny, rgb, *, less_equal=True):
     plus and minus its own normal.  The offset rides on ``gl_Position.xy`` multiplied by
     ``gl_Position.w`` (``splines.vert:103``), which is a shift in window space: it moves
     a sample sideways and leaves its depth and its weight exactly as they were.
+
+    Kept as the word for what :func:`_ribbon_triangles` builds in bulk, and as the painter
+    a test can hold the bulk against.
     """
     for i in range(len(x) - 1):
         j = i + 1
@@ -508,6 +1014,53 @@ def _ribbon(canvas, x, y, w, z, nx, ny, rgb, *, less_equal=True):
             s = np.array([c[1] for c in corners])
             _paint_flat(canvas, x[k] + s * nx[k], y[k] + s * ny[k], w[k], z[k], rgb,
                         less_equal=less_equal)
+
+
+# One segment of a ribbon is two triangles, and a corner of one is a sample of the segment
+# and a side of that sample (three/edges.ts:50-66): the first row is (a_i, b_i, b_i+1) and
+# the second (b_i+1, a_i+1, a_i), with a the sample plus its rail and b the sample minus it.
+_RIBBON_CORNERS = np.array(((0, 0, 1), (1, 1, 0)))
+_RIBBON_RAILS = np.array(((1.0, -1.0, -1.0), (-1.0, 1.0, 1.0)))
+
+
+def _ribbon_triangles(x, y, w, z, nx, ny, *, rails="sample"):
+    """The triangles the rails of every instance of a curve bound, in the order drawn.
+
+    ``x``, ``y``, ``w`` and ``z`` are the ``(n, m)`` window space of the ``m`` samples of
+    each of ``n`` instances, and ``nx``, ``ny`` are their rails: ``(n, m)``, the rail of the
+    sample a corner stands on, when ``rails`` is ``"sample"``, which is what ``THICK_LINES``
+    does, since ``splines.vert:96-101`` offsets every sample along its *own* look-ahead; or
+    ``(n, m - 1)``, the rail of the segment between two samples, when it is ``"segment"``,
+    which is what a strip does -- ``three/mesh.ts:160-240`` builds the wireframe without the
+    define, so it has no thickness to spread and offsets a segment along its own chord
+    instead.  Which of the two it is decides whether a turn in a curve joins across the
+    corner or meets at it, so it is a thing the caller states and not a thing that is guessed
+    from a shape.
+
+    The answer is four ``(n * (m - 1) * 2, 3)`` arrays in the order the loops drew them:
+    instance, then segment, then the two triangles of :func:`_ribbon`.  The order is not
+    incidental but the depth test's whole opinion, since a ribbon drawn later takes the pixels
+    of one drawn earlier on a tie.  The corners are ``x[k] + s * nx[k]``, term for term as
+    :func:`_ribbon` evaluated them, and the depth and the weight ride along untouched, which
+    is what a shift of ``gl_Position.xy`` by its ``w`` (``splines.vert:103``) really means.
+    """
+    if rails not in ("sample", "segment"):
+        raise ValueError(f"rails is either 'sample' or 'segment', not {rails!r}")
+    x, y, w, z = (np.asarray(a, dtype=np.float64) for a in (x, y, w, z))
+    nx, ny = (np.asarray(a, dtype=np.float64) for a in (nx, ny))
+    n = x.shape[-1] - 1
+    if n < 1:
+        empty = np.zeros((0, 3))
+        return empty, empty, empty, empty
+    corner = np.arange(n)[:, None, None] + _RIBBON_CORNERS
+    x, y, w, z = (a[:, corner] for a in (x, y, w, z))
+    if rails == "sample":
+        nx, ny = (a[:, corner] for a in (nx, ny))
+    else:
+        nx, ny = (a[:, :, None, None] for a in (nx, ny))
+    return (np.reshape(x + _RIBBON_RAILS * nx, (-1, 3)),
+            np.reshape(y + _RIBBON_RAILS * ny, (-1, 3)),
+            np.reshape(w, (-1, 3)), np.reshape(z, (-1, 3)))
 
 
 def _line_modes(function_mode):
@@ -561,12 +1114,12 @@ def paint_edges(canvas, cam, order, ctrl, *, n_segments=N_SEGMENTS, colour=(0.0,
     ax, ay, _, _ = _project(canvas, cam, ahead)
     shape = pos.shape[:-1]
     x, y, depth, w, ax, ay = (a.reshape(shape) for a in (x, y, depth, w, ax, ay))
-    for e in range(pos.shape[0]):
-        if not _usable(x[e], y[e], depth[e], w[e]):
-            continue
-        nx, ny = _rail(x[e], y[e], ax[e], ay[e], half)
-        _ribbon(canvas, x[e], y[e], w[e], depth[e], nx, ny, rgb, less_equal=less_equal)
-    return canvas
+    # splines.vert:66-69 culls the instance and not the segment, so a curve with one broken
+    # control point is gone whole -- every one of its ribbons -- before the rasterizer
+    keep = _projects(x, y, depth, w)
+    nx, ny = _rail(x, y, ax, ay, half)
+    X, Y, W, Z = _ribbon_triangles(x[keep], y[keep], w[keep], depth[keep], nx[keep], ny[keep])
+    return _paint_stack(canvas, X, Y, W, Z, rgb=rgb, less_equal=less_equal)
 
 
 def paint_wireframe(canvas, cam, order, ctrl, *, n_segments=N_SEGMENTS,
@@ -592,13 +1145,10 @@ def paint_wireframe(canvas, cam, order, ctrl, *, n_segments=N_SEGMENTS,
     x, y, depth, w = _project(canvas, cam, pos)
     shape = pos.shape[:-1]
     x, y, depth, w = (a.reshape(shape) for a in (x, y, depth, w))
-    for e in range(pos.shape[0]):
-        if not _usable(x[e], y[e], depth[e], w[e]):
-            continue
-        for i in range(n):
-            j = i + 1
-            nx, ny = _rail(x[e, i], y[e, i], x[e, j], y[e, j], half)
-            pick = slice(i, j + 1)
-            _ribbon(canvas, x[e, pick], y[e, pick], w[e, pick], depth[e, pick],
-                    np.repeat(nx, 2), np.repeat(ny, 2), rgb, less_equal=less_equal)
-    return canvas
+    keep = _projects(x, y, depth, w)
+    # the rail of a strip is the direction of the segment itself, so the two corners at
+    # either end of it are pushed along the same line: see _ribbon_triangles
+    nx, ny = _rail(x[:, :-1], y[:, :-1], x[:, 1:], y[:, 1:], half)
+    X, Y, W, Z = _ribbon_triangles(x[keep], y[keep], w[keep], depth[keep], nx[keep], ny[keep],
+                                   rails="segment")
+    return _paint_stack(canvas, X, Y, W, Z, rgb=rgb, less_equal=less_equal)
