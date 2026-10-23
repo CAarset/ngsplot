@@ -200,7 +200,7 @@ control points are constant per triangle, autoscaled 0…33.
   **webgui 0.2.39 has no cutplane/slice object type**, and 3D slicing exists solely through the
   hidden clipping-plane objects the GUI toggles.
 
-## Two capture limitations (so nobody reads more into these PNGs than they hold)
+## Capture limitations (so nobody reads more into these PNGs than they hold)
 
 1. **`surface_scalar` is not a surface in 3D.** `ReadGmsh` of a `$MeshFormat 2.2` file whose
    elements are dim-2 yields a netgen mesh whose `Coordinates()` are **2 doubles per point**
@@ -216,6 +216,17 @@ control points are constant per triangle, autoscaled 0…33.
    `netgen.libngpy._meshing.Mesh` exposes only the getters `FaceDescriptor`/`FaceDescriptors`/
    `EdgeDescriptor`/`EdgeDescriptors`/`GetNFaceDescriptors` — no `AddFaceDescriptor` — while a
    hand-built `Mesh(2)` dies with "has no face descriptor: fd.size = 0".)
+3. **Its surface colours are the one thing ngsplot does not reproduce, and this capture cannot
+   say why.** Painting the recorded payload gives back the outline exactly — same bounding box,
+   rows 104–489 and columns 254–639, and the amount of ink inside it within 1 % of the
+   recording's — while 3.3 % of the interior (a 2-pixel erosion of the pixels both pictures
+   paint) differs by more than 8 of 255, mean 2.1.  The differences run both ways (455 pixels
+   brighter, 267 darker), so it is not one shading factor such as a dimmed back side, and what
+   is left is how an imported P2 triangle patch fills the six Bézier attribute arrays that
+   `trigsplines.vert` reads as `p00 p01 p02 p10 p11 p20`.  Unprovable from a capture whose
+   geometry was truncated at import: `tests/test_dims.py` pins the outline of this scene and
+   leaves its colours out of the parity list.  A 2-in-3 mesh built by netgen itself, with real
+   boundary segments, would settle it and is still owed.
 
 ## Failures recorded verbatim
 
