@@ -143,6 +143,27 @@ takes part). `updatePMinMax` does the same per column of the positions, giving
 only inside the `if d['draw_vol']` branch, so a payload built with `draw_vol=False` has
 no range to read.
 
+What those ends are worth is decided in four steps, and `scene.view_range` follows them in
+the same order. `initColormap` seeds the panel minimum and maximum from `funcmin`/`funcmax`,
+falling back to 0 and 1 (`gui.ts:336-343`). A payload's `gui_settings` is applied over that:
+sections missing from it are filled from the panel defaults, and then its *flat* names
+overwrite the sections they belong to — `autoscale`, `colormap_min`, `colormap_max`,
+`colormap_ncolors`, `subdivision`, `line_thickness`, `Misc.reduce_subdivision` into
+`fast_draw`, and `edges`/`mesh`/`elements` into `Objects.Edges`/`Wireframe`/`Surface`
+(`gui.ts:146-175`). Rendering re-reads the function only if the payload's **top-level**
+`autoscale` lets it (`scene.ts:497`), and `updateColormapToAutoscale` then does nothing
+unless the panel's own `Colormap.autoscale` is on and there is a function to follow,
+`draw_surf || draw_vol` (`gui.ts:366-390`); a drawn length never goes negative, so mode 3
+stretches the range to `0 .. max(|funcmin|, |funcmax|)`. Since `Draw(min=a, max=b)` writes
+`funcmin`/`funcmax` themselves (`netgen/webgui.py:544-547`) it survives both paths, while
+`Draw(autoscale=False)` stops the recompute and leaves a vector at its own negative minimum
+rather than the mode-3 one — which is what ngsplot's `autoscale=False` means too. An
+animated draw mixes the two payloads' `funcmin`/`funcmax` per frame under the same
+condition (`scene.ts:508`). One more default, worth its place here because it is a
+*default* and not a rule: the page writes a subdivision of 1 into `settings_default` when
+`max(order2d, order3d) <= 1` (`gui.ts:229-231`), before the payload's settings go over the
+defaults, so a payload naming a subdivision of its own on a linear mesh gets it.
+
 ## Colour: 8 discrete bands, nearest-neighbour
 
 Measured live: the colormap is an **8 x 1 `FloatType` RGBA texture**, `magFilter =

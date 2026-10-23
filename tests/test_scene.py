@@ -160,6 +160,57 @@ def test_a_flat_payload_lifts_by_the_scale_it_carries():
         "deformation"] == 0.0
 
 
+def test_a_payload_may_name_its_knobs_the_way_draw_does():
+    """The flat names a payload carries outrank the sections they belong to.
+
+    ``updateSettings`` (``gui.ts:146-175``) copies every flat name of the payload's
+    settings into the section it belongs to -- ``colormap_min`` into ``Colormap.min``,
+    ``mesh`` into ``Objects.Wireframe``, ``elements`` into ``Objects.Surface`` -- over
+    whatever that section said as well.  They are the names ``Draw`` itself writes, so
+    they are the first ones a script meets.
+    """
+    settings = scene.settings_of({
+        "funcdim": 1, "order2d": 3, "order3d": 2,
+        "gui_settings": {
+            "Colormap": {"min": 0.0, "max": 1.0, "ncolors": 8},
+            "colormap_min": -2.0, "colormap_max": 3.0, "colormap_ncolors": 4,
+            "line_thickness": 2.0, "subdivision": 7,
+            "mesh": False, "edges": False, "elements": False,
+        },
+    })
+    assert settings["ncolors"] == 4
+    assert settings["line_width"] == 2.0
+    assert settings["subdivision"] == 7
+    assert settings["wireframe"] is False and settings["edges"] is False
+    assert settings["surface"] is False
+
+    ends = {"funcdim": 1, "funcmin": -9.0, "funcmax": 9.0, "draw_surf": True,
+            "autoscale": False,      # otherwise the ends of the function overwrite them
+            "gui_settings": {"Colormap": {"min": 0.0, "max": 1.0},
+                             "colormap_min": -2.0, "colormap_max": 3.0}}
+    assert scene.view_range(ends) == (-2.0, 3.0)
+
+
+def test_a_linear_mesh_goes_unsubdivided_only_until_the_payload_says_otherwise():
+    """The page forces one segment for a linear mesh *before* the payload speaks.
+
+    ``gui.ts:229-231`` writes the forcing into the defaults, and the settings of the
+    payload are applied over the defaults afterwards, so a payload that names a
+    subdivision of its own gets it.  ``Misc.reduce_subdivision`` is the older name of
+    the ``fast_draw`` checkbox, which shortens it the other way.
+    """
+    linear = {"order2d": 1, "order3d": 1}
+    assert scene.settings_of(linear)["subdivision"] == 1
+    assert scene.settings_of({**linear,
+                              "gui_settings": {"Misc": {"subdivision": 3}}})["subdivision"] == 3
+    assert scene.settings_of({**linear,
+                              "gui_settings": {"subdivision": 9}})["subdivision"] == 9
+
+    curved = {"order2d": 3, "order3d": 2}
+    assert scene.settings_of(curved)["subdivision"] == 5
+    assert scene.settings_of({**curved, "gui_settings": {"Misc": {"reduce_subdivision": True}}})["subdivision"] == 1
+
+
 # ------------------------------------------------------------------- the value range
 
 def test_an_autoscaled_draw_follows_the_function_and_a_still_one_the_panel():
@@ -179,6 +230,24 @@ def test_a_length_never_goes_below_zero():
     vector = {"funcdim": 2, "funcmin": -3.0, "funcmax": 7.0, "draw_surf": True}
     assert scene.view_range(vector, function_mode=3.0) == (0.0, 7.0)
     assert scene.view_range(vector) == (-3.0, 7.0)      # as components, not length
+
+
+def test_a_payload_that_says_it_is_still_is_left_alone():
+    """``Draw(autoscale=False)`` leaves one flag at the top of the payload (``webgui.py:548``).
+
+    The panel re-reads the ends of the function only when that flag lets it
+    (``scene.ts:497``, through ``updateColormapToAutoscale``), so a vector drawn as a
+    length otherwise keeps whatever ``funcmin`` and ``funcmax`` happen to say, a negative
+    end and all -- which is the point of asking for a fixed range.
+    """
+    vector = {"funcdim": 2, "funcmin": -3.0, "funcmax": 7.0, "draw_surf": True}
+    assert scene.settings_of(vector)["autoscale"] is True
+    assert scene.view_range(vector, function_mode=3.0) == (0.0, 7.0)
+
+    still = {**vector, "autoscale": False}
+    assert scene.settings_of(still)["autoscale"] is False
+    assert scene.view_range(still, function_mode=3.0) == (-3.0, 7.0)
+    assert scene.view_range(still, function_mode=3.0, vmax=1.0) == (-3.0, 1.0)
 
 
 def test_a_mesh_without_a_function_is_painted_by_region():
@@ -286,6 +355,15 @@ def test_the_wireframe_switch_leaves_no_ink_of_its_own():
     assert dark() > 3000
     assert dark(wireframe=False) == 0        # the interior of square_scalar is all wireframe
     assert dark(edges=False) > 3000          # the outline is outside the box anyway
+
+
+def test_the_surface_switch_leaves_the_lines_standing():
+    """``Objects.Surface`` off: no colour of its own, and nothing but grey ink left."""
+    render_data, width, height = square()
+    canvas = scene.paint(render_data, width=width, height=height, surface=False)
+    assert int((np.ptp(canvas.color[..., :3], axis=-1) > 0).sum()) == 0
+    both = scene.paint(render_data, width=width, height=height)
+    assert int((np.ptp(both.color[..., :3], axis=-1) > 0).sum()) > 1000
 
 
 def test_the_recorded_range_is_the_scene_that_recorded_it():
