@@ -175,12 +175,21 @@ def wrap_about(matrix, point):
     return translation(p) @ np.asarray(matrix, dtype=np.float64) @ translation(-p)
 
 
-def object_matrix(mesh_center, mesh_radius, *, euler_angles=None, transformations=None):
+def object_matrix(mesh_center, mesh_radius, *, euler_angles=None, transformations=None,
+                  elev=None, azim=None, roll=None):
     """The matrix the surface, wireframe and edge objects are drawn with.
 
     ``mesh_center`` and ``mesh_radius`` are the two numbers ``BuildRenderData`` reports;
     ``euler_angles`` and ``transformations`` are the entries of ``settings['camera']``,
     applied in the order the renderer applies them (see ``camera.ts:174-220``).
+
+    ``elev``, ``azim`` and ``roll`` are the three turns of ``Axes3D.view_init``, in degrees,
+    put on last and made about the centre of the mesh: ``elev`` looks at the mesh from above,
+    ``azim`` turns it about the vertical of the canvas, ``roll`` rolls it about the axis to
+    the eye.  Three zeros are the view the page opens with, which looks straight at ``xy``:
+    the camera never moves here, so these are turns of the object, and they are the page's
+    triple ``[-elev, azim, roll]`` in the order ``ZYX`` -- tipped first, then turned, then
+    rolled.
     """
     center = np.asarray(mesh_center, dtype=np.float64).reshape(3)
     radius = float(mesh_radius)
@@ -207,6 +216,18 @@ def object_matrix(mesh_center, mesh_radius, *, euler_angles=None, transformation
             vector[_AXIS[kind[-1]]] = 1.0
             rot = rotation_about_axis(vector, float(move["angle"]) * DEG)
             mat = chain(mat, wrap_about(rot, transform_points(center, mat)[0]))
+
+    # the screen keeps its axes where the world has them, since the camera does not turn; a
+    # positive elevation looks down on the mesh, and the camera looks along -z with +y up, so
+    # that is a *negative* turn about x
+    for name, angle in zip("XYZ", (elev, azim, roll)):
+        if angle is None or not float(angle):
+            continue
+        degrees = -float(angle) if name == "X" else float(angle)
+        vector = np.zeros(3)
+        vector[_AXIS[name]] = 1.0
+        rot = rotation_about_axis(vector, degrees * DEG)
+        mat = chain(mat, wrap_about(rot, transform_points(center, mat)[0]))
     return mat
 
 
@@ -246,7 +267,8 @@ class Camera:
     def __init__(self, mesh_center, mesh_radius, *, width, height,
                  fov=FOV, near=NEAR, far=FAR, zoom=1.0,
                  position=CAMERA_POSITION, quaternion=(0.0, 0.0, 0.0, 1.0),
-                 euler_angles=None, transformations=None):
+                 euler_angles=None, transformations=None,
+                 elev=None, azim=None, roll=None):
         self.mesh_center = np.asarray(mesh_center, dtype=np.float64).reshape(3)
         self.mesh_radius = float(mesh_radius)
         self.width = int(width)
@@ -259,7 +281,8 @@ class Camera:
         self.quaternion = np.asarray(quaternion, dtype=np.float64).reshape(4)
         self.object = object_matrix(self.mesh_center, self.mesh_radius,
                                     euler_angles=euler_angles,
-                                    transformations=transformations)
+                                    transformations=transformations,
+                                    elev=elev, azim=azim, roll=roll)
         self.view = view_matrix(self.position, self.quaternion)
         self.projection = perspective_matrix(self.aspect, self.fov, self.near, self.far,
                                              self.zoom)

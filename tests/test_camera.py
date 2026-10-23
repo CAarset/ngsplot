@@ -360,3 +360,95 @@ def test_euler_order_is_spelled_case_insensitively():
 def test_a_mesh_without_extent_is_refused():
     with pytest.raises(ValueError, match="mesh_radius"):
         camera.object_matrix([0.0, 0.0, 0.0], 0.0)
+
+
+# a view stated the way a viewer states it: elevation, azimuth and roll
+
+
+def view(**kwargs):
+    """A camera for the ground-truth square on the page's canvas, with ``kwargs`` as its view."""
+    return camera.Camera(CENTER, RADIUS, width=894, height=594, **kwargs)
+
+
+def mesh_point(dx, dy=0.0, dz=0.0):
+    """A point of the ground-truth square, one mesh radius from its centre."""
+    return np.array(CENTER) + RADIUS * np.array([dx, dy, dz], dtype=float)
+
+
+def depths(cam, points):
+    """How far each point sits from the camera, in the camera's own units.
+
+    The camera looks along ``-z``, so the farther a point is, the smaller its ``z``.
+    """
+    return camera.transform_points(points, cam.model_view)[:, 2]
+
+
+def test_three_zeros_are_the_view_the_page_opens_with():
+    # the page has no view of its own to state: an untouched panel looks straight at xy
+    np.testing.assert_allclose(view(elev=0, azim=0, roll=0).object, view().object, atol=0)
+
+
+def test_a_positive_elevation_looks_at_the_mesh_from_above():
+    top, bottom = depths(view(elev=30), [mesh_point(0, 1), mesh_point(0, -1)])
+    assert top < bottom
+
+
+def test_a_positive_azimuth_turns_the_x_side_of_the_mesh_away():
+    right, left = depths(view(azim=30), [mesh_point(1), mesh_point(-1)])
+    assert right < left
+
+
+def test_a_positive_roll_turns_the_mesh_counter_clockwise_on_screen():
+    x, y, _, w = view(roll=90).project([mesh_point(1)])[0]
+    assert w > 0
+    assert x == pytest.approx(894 / 2, abs=1e-9)  # what pointed right now points up
+    assert y < 594 / 2
+
+
+def test_the_three_turns_are_the_page_triple_in_the_order_zyx():
+    # the page's own camera holds Euler angles about the mesh centre; the three named turns
+    # are the same three turns, tilted first, then turned, then rolled
+    elev, azim, roll = 12.0, -37.0, 5.0
+    np.testing.assert_allclose(view(elev=elev, azim=azim, roll=roll).object,
+                               view(euler_angles=[-elev, azim, roll, "ZYX"]).object,
+                               atol=1e-13)
+
+
+def test_a_view_about_the_mesh_centre_leaves_the_centre_where_it_was():
+    before = view().project([mesh_point(0, 0, 0)])[0]
+    after = view(elev=30, azim=-60, roll=10).project([mesh_point(0, 0, 0)])[0]
+    np.testing.assert_allclose(after[:2], before[:2], atol=1e-9)
+
+
+def test_the_named_view_reaches_a_camera_made_from_a_payload():
+    data = render_data_of("square_scalar")
+    wanted = camera.Camera(data["mesh_center"], data["mesh_radius"], width=894, height=594,
+                           elev=25, azim=40)
+    cam = camera.Camera.from_render_data(data, width=894, height=594, elev=25, azim=40)
+    np.testing.assert_allclose(cam.object, wanted.object, atol=0)
+    assert not np.allclose(cam.object, view().object)
+
+
+def test_a_recorded_camera_and_a_named_view_are_both_honoured():
+    # square_rotated holds the triple a panel drag left behind; a stated view adds to it
+    data = render_data_of("square_rotated")
+    centre, radius = data["mesh_center"], data["mesh_radius"]
+    recorded = camera.Camera.from_render_data(data, width=894, height=594)
+    plain = camera.Camera(centre, radius, width=894, height=594)
+    both = camera.Camera.from_render_data(data, width=894, height=594, roll=90)
+    top = [mesh_point(0, 1)]
+    # a roll about the view axis changes no depth, so this compares the two recorded views
+    assert depths(both, top)[0] == pytest.approx(depths(recorded, top)[0], abs=1e-12)
+    assert not np.allclose(both.object, recorded.object)  # the drag is still in there
+    assert not np.allclose(both.object, camera.Camera(centre, radius, width=894, height=594,
+                                                       roll=90).object)
+
+
+def test_a_tilt_makes_a_flat_mesh_reach_towards_the_camera():
+    data = render_data_of("square_scalar")
+    centre, radius = data["mesh_center"], data["mesh_radius"]
+    corners = np.array([[0, 0, 0], [1, 0, 0], [1, 1, 0], [0, 1, 0]], dtype=float)
+    flat = camera.Camera.from_render_data(data, width=894, height=594)
+    assert np.allclose(depths(flat, corners), depths(flat, corners)[0], atol=1e-12)
+    tilted = camera.Camera(centre, radius, width=894, height=594, elev=30)
+    assert depths(tilted, corners).max() - depths(tilted, corners).min() > 0.1

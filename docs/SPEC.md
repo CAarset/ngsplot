@@ -349,6 +349,23 @@ The Euler orders are intrinsic turns about the fixed axes, so `'XYZ'` is `Rx @ R
 `'YXZ'` is `Ry @ Rx @ Rz` — all six verified against the live renderer with the same
 `[10, 20, 30]` in `tests/gt/euler_orders.json` (`tools/probe_euler_orders.py`).
 
+A view a *script* asks for is not spelled that way, because nobody writing `Draw` ever wrote
+`euler_angles`: a panel drag left it in `settings['camera']` and that is all it has ever been
+good for. The three words users know are matplotlib's — `elev`, `azim` and `roll` of
+`Axes3D.view_init`, degrees — and since the camera never moves and the screen keeps the world's
+axes (right `+x`, up `+y`, the eye at `+z`), they are three more turns of the object about the
+mesh centre: `Rz(roll) · Ry(azim) · Rx(-elev)`, tipped first, then turned, then rolled. The
+elevation carries the minus sign because the camera looks along `-z`: a positive `elev` takes the
+top of the mesh away from the eye and brings the underside into sight, which is what looking down
+from above is. A positive `azim` makes `+x` recede, and a positive `roll` turns the picture
+counter-clockwise. That is the page's triple `[-elev, azim, roll]` in the order `'ZYX'`, and
+`tests/test_camera.py` holds that identity as a known answer, with each single turn checked
+against the page's own single-axis triple. Three zeros — three angles left out — are the page's
+head-on view, straight at `xy`: page parity is the promise, so the *renderer's* default is not
+matplotlib's, and a solid asks for matplotlib's `elev=30, azim=-60` out loud. `Plot` refuses
+`euler_angles` by name, so a script has one spelling of a point of view while a saved page still
+replays with the camera it was saved with.
+
 The projection is three.js' `PerspectiveCamera.updateProjectionMatrix` with `left = -right`
 and `top = -bottom`, so with `t = tan(fov/2)`: `fx = 1/(aspect * t)`, `fy = 1/t`,
 `A = -(far+near)/(far-near)`, `B = -2 far near/(far-near)`, and the bottom row `(0, 0, -1, 0)`.

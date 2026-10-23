@@ -23,9 +23,9 @@ The keywords are split by what they are for, and the rule is one line long:
 * the keywords of :func:`ngsplot.scene.paint` and of :class:`ngsplot.camera.Camera` go to the
   painter -- ``vmin``, ``vmax``, ``autoscale``, ``cmap``, ``ncolors``, ``n_segments``,
   ``line_width``, ``surface``, ``wireframe``, ``edges``, ``function_mode``, ``complex_scale``,
-  ``dark_backside``, ``is_complex``, ``euler_angles``, ``transformations``, ...
+  ``dark_backside``, ``is_complex``, ``elev``, ``azim``, ``roll``, ``transformations``, ...
 * everything else goes to ``Draw``, so the keywords that shape the payload -- ``order``,
-  ``draw_vol``, ``draw_surf``, ``objects``, ``settings``, ``scale``, ``nodal_p1`` -- keep their
+  ``draw_vol``, ``draw_surf``, ``settings``, ``scale``, ``nodal_p1`` -- keep their
   meaning, and a payload that was already built refuses them with a named error instead.
 * ``deformation`` is the panel's slider and belongs on both sides: a payload is told to lift its
   geometry by the flag the shaders switch on, with the amount in ``Draw``'s ``scale``, since a
@@ -36,6 +36,13 @@ The keywords are split by what they are for, and the rule is one line long:
   (docs/SPEC.md, "Why Draw is clunky") so it reaches nothing.  Here it means what the panel's
   dropdown means -- ``"real"``, ``"imag"``, ``"norm"``, ``"x"`` -- or the number from
   ``function.frag``, and it is the same knob as ``function_mode``.
+* the point of view is spelled the way a viewer spells it: ``elev``, ``azim`` and ``roll``, in
+  degrees, the three of ``Axes3D.view_init``.  Left out, they are the view the page opens with,
+  straight at ``xy``, which is what a flat picture wants; ``elev=30, azim=-60`` is the angle
+  matplotlib's own 3D plots open with, and what a solid wants.  The ``euler_angles`` triple a
+  panel drag leaves in ``settings['camera']`` is a payload's private business:
+  :func:`ngsplot.scene.paint` still reads it, so a saved page replays with the camera it was
+  saved with, while a plot refuses the name rather than keep two spellings of one knob.
 
 Nothing is registered in matplotlib's registry: the webgui ramp exists per picture, handed to a
 colourbar as a private ``ListedColormap`` of the band count that picture used.
@@ -159,11 +166,21 @@ def Plot(obj=None, ax=None, *, mesh=None, colorbar=False, width=WIDTH, height=HE
     the same bands and between the same ends, and takes the room for it out of the picture --
     beside taking the frame off, the only two things a plot does to an axis it did not make.
 
+    The point of view is ``elev``, ``azim`` and ``roll``, in degrees -- the three angles of
+    ``Axes3D.view_init``, put on a camera that stays where the page put it.  Left out, they are
+    the view the page opens with, straight at ``xy``, which is what a flat picture wants;
+    ``elev=30, azim=-60`` is the angle matplotlib's own 3D plots open with, and what a solid
+    wants to be seen from.
+
     Returns the :class:`~matplotlib.image.AxesImage`.  Plotting twice into one axis replaces the
     picture rather than laying a second under it, which is what an animation of a time loop
     needs; titles, labels and colourbars are left to whoever made them.
     """
     width, height = int(width), int(height)
+    if "euler_angles" in kwargs:
+        raise TypeError("the point of view is spelled elev, azim and roll here, the three "
+                        "angles of matplotlib's view_init; euler_angles is what a page's camera "
+                        "holds, and scene.paint still reads it off a payload")
     if obj is None:
         obj, mesh = mesh, None  # a mesh under its own name is what to draw, as it is for Draw
     if obj is None:

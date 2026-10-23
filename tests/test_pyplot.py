@@ -136,7 +136,7 @@ def test_a_picture_needs_no_rulers_and_no_stretching():
     {"wireframe": False},
     {"edges": False, "line_width": 1.0},
     {"surface": False},
-    {"euler_angles": [20.0, 30.0, 0.0]},
+    {"elev": 20.0, "azim": 30.0, "roll": 0.0},
     {"n_segments": 3},
 ])
 def test_a_keyword_of_the_plot_is_a_keyword_of_the_renderer(kwargs):
@@ -144,6 +144,31 @@ def test_a_keyword_of_the_plot_is_a_keyword_of_the_renderer(kwargs):
     payload = gtdata.render_data_of("dims/surface_scalar")
     assert np.array_equal(pyplot.Plot(payload, **kwargs).get_array(),
                           painted(payload, **kwargs).to_uint8())
+
+
+def test_the_view_is_named_the_way_a_viewer_names_it():
+    """``elev``, ``azim`` and ``roll``: matplotlib's three words for a point of view.
+
+    ``Axes3D.view_init`` takes them, in degrees, and its defaults are what every other 3D
+    viewer opens with, so a picture of a solid is turned by the same numbers a reader of
+    matplotlib would reach for.
+    """
+    payload = gtdata.render_data_of("dims/volume_scalar")
+    image = pyplot.Plot(payload, elev=30, azim=-60, width=300, height=200)
+    assert np.array_equal(image.get_array(),
+                          painted(payload, elev=30, azim=-60, width=300,
+                                  height=200).to_uint8())
+    # and the picture really is turned: a flat view of the same solid looks different
+    assert (image.get_array() != painted(payload, width=300, height=200).to_uint8()).any()
+
+
+def test_the_triple_a_page_drag_leaves_behind_is_not_a_plot_keyword():
+    """One spelling of a point of view, and it is the one a reader knows (docs/SPEC.md)."""
+    payload = gtdata.render_data_of("dims/cf_mesh")
+    with pytest.raises(TypeError, match="elev, azim and roll"):
+        pyplot.Plot(payload, euler_angles=[20.0, 30.0, 0.0])
+    # the renderer still reads it, because that is how a saved page replays
+    assert painted(payload, euler_angles=[20.0, 30.0, 0.0]) is not None
 
 
 def test_a_thing_that_is_not_a_knob_is_refused_rather_than_ignored():
