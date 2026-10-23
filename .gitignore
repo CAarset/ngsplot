@@ -7,3 +7,5 @@ __pycache__/
 build/
 dist/
 .coverage
+frames/
+.ipynb_checkpoints/

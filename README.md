@@ -53,6 +53,12 @@ take go to the painter, the rest go to `Draw`, so `order`, `draw_vol` and `setti
 meaning. A payload built earlier by `ngsplot._ngsolve.render_data` may be plotted
 directly, and refuses the keywords that would have shaped it instead of ignoring them.
 
+[examples/ngsplot.ipynb](examples/ngsplot.ipynb) runs all of it against a 1D, a 2D and a 3D
+finite element space: the flat line of a function on a mesh of dimension 1, the surface case with
+its colourbar, the knobs side by side, a `CoefficientFunction` on a named mesh, a vector and a
+complex field, `L2(order=0)`, a `NumberSpace`, a solid seen from three angles, and a time loop
+written out as frames. It executes end to end; only the meshes need ngsolve.
+
 ## Status
 
 Every stage of the pipeline is in place and covered by tests that transcribe the corresponding
