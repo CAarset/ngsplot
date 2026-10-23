@@ -40,6 +40,32 @@ there is no C in the drawing path at all. The friction comes from Draw being a
 So: the clunkiness is *live-control GUI + racy async transport*, inherited from an
 interactive-tool heritage (Netgen's GUI) rather than from C.
 
+## Taking the payload without taking the window
+
+`ngsplot._ngsolve.render_data(obj, *args, **kwargs)` is the only place in the package that
+imports ngsolve. It calls `Draw` and reads back what `Draw` would have sent:
+
+```python
+scene = Draw(obj, *args, show=False, **kwargs)   # netgen/webgui.py:674
+return scene.widget.value                        # the dict WebGLScene handed the widget
+```
+
+`Draw` applies `_get_draw_default_args()` and builds a `WebGLScene`, whose constructor is where
+the work is: `GetData` (`netgen/webgui.py:480`) picks an `encoding`, dispatches on
+`type(obj)` to the draw type registered for it, and finishes the dict with the range, the flags
+and the camera. The widget is a plain `anywidget` object and nothing is displayed with
+`show=False`, so the payload exists before any browser does. `ngsolve.webgui` has to be
+imported for the dispatch to know `Mesh`, `CoefficientFunction` and `GridFunction`, which the
+seam does for its caller.
+
+Two of `Draw`'s habits are kept rather than repaired, because the seam's promise is that a
+payload from ngsplot is the payload from `Draw`: a `CoefficientFunction` needs its mesh
+positionally and raises `Cannot draw CoefficientFunction without mesh`
+(`ngsolve/webgui.py:119`) without one, and the dead `eval_` branch above stays dead.
+`show` and `filename` are the two keywords the seam does not pass on; they belong to the window
+it never opens. `widget.value` is read instead of calling `GetData()` again so that the arrays
+are fitted once and not twice — `GenerateHTML` builds them a second time.
+
 ## Geometry: exact, not sampled
 
 `ngsolve.webgui.BuildRenderData(mesh, func, order=2, ...)` exports Bezier control points

@@ -170,16 +170,18 @@ def mesh_surface():
 
 
 # --------------------------------------------------------------------------- scenes
+#
+# Each builder returns what to hand to Draw -- (object, positional, keywords) -- and not a
+# payload, so that a test can send the very same arguments down another path and compare.
 
 def _line(deformation=False):
     gfu = ngs.GridFunction(ngs.H1(mesh_1d(), order=2))
     gfu.Set(ngs.x * ngs.x)
-    return wg.Draw(gfu, deformation=deformation, show=False).GetData()
+    return gfu, (), {"deformation": deformation}
 
 
 def _numberspace():
-    gfu = ngs.GridFunction(ngs.NumberSpace(mesh_square()))
-    return wg.Draw(gfu, show=False).GetData()
+    return ngs.GridFunction(ngs.NumberSpace(mesh_square())), (), {}
 
 
 def _numberspace_l2pwc():
@@ -195,45 +197,66 @@ def _numberspace_l2pwc():
     for i, ed in enumerate(mesh.Elements()):
         for dof in fes.GetDofNrs(ngs.ElementId(ed)):
             gfu.vec[dof] = i
-    return wg.Draw(gfu, show=False).GetData()
+    return gfu, (), {}
 
 
 def _volume(objects=None):
     gfu = ngs.GridFunction(ngs.H1(mesh_3d(), order=2))
     gfu.Set(ngs.x + 2 * ngs.y + 3 * ngs.z)
-    kwargs = {"objects": objects} if objects else {}
-    return wg.Draw(gfu, show=False, **kwargs).GetData()
+    return gfu, (), {"objects": objects} if objects else {}
 
 
 def _surface():
     gfu = ngs.GridFunction(ngs.H1(mesh_surface(), order=2))
     gfu.Set(ngs.x * ngs.y)
-    return wg.Draw(gfu, show=False).GetData()
+    return gfu, (), {}
 
 
 def _cf_nomesh():
     # expected: RuntimeError from GetData (Draw itself is lazy)
-    return wg.Draw(ngs.x * ngs.y, show=False).GetData()
+    return ngs.x * ngs.y, (), {}
 
 
 def _cf_mesh():
-    return wg.Draw(ngs.x * ngs.y, mesh_square(), show=False).GetData()
+    return ngs.x * ngs.y, (mesh_square(),), {}
 
 
 def _cf_vector():
-    return wg.Draw(ngs.CF((-ngs.y, ngs.x)), mesh_square(), show=False).GetData()
+    return ngs.CF((-ngs.y, ngs.x)), (mesh_square(),), {}
 
 
 def _vec_hcurl():
     gfu = ngs.GridFunction(ngs.HCurl(mesh_square(), order=1))
     gfu.Set(ngs.CF((-ngs.y, ngs.x)))
-    return wg.Draw(gfu, show=False).GetData()
+    return gfu, (), {}
 
 
 def _complex_h1():
     gfu = ngs.GridFunction(ngs.H1(mesh_square(), order=2, complex=True))
     gfu.Set(ngs.x + 1j * ngs.y)
-    return wg.Draw(gfu, show=False).GetData()
+    return gfu, (), {}
+
+
+SCENES = {
+    "line_scalar": _line,
+    "line_deformed": lambda: _line(deformation=True),
+    "numberspace": _numberspace,
+    "numberspace_l2pwc": _numberspace_l2pwc,
+    "volume_scalar": _volume,
+    "volume_cuts": lambda: _volume(objects=[ngs.x, ngs.y]),
+    "surface_scalar": _surface,
+    "cf_nomesh": _cf_nomesh,
+    "cf_mesh": _cf_mesh,
+    "cf_vector": _cf_vector,
+    "vec_hcurl": _vec_hcurl,
+    "complex_h1": _complex_h1,
+}
+
+
+def draw(name):
+    """The payload of a scene, built by ``Draw`` exactly as the capture built it."""
+    obj, args, kwargs = SCENES[name]()
+    return wg.Draw(obj, *args, show=False, **kwargs).GetData()
 
 
 SCENES = {
@@ -283,7 +306,7 @@ def capture(name):
     sidecar = os.path.join(OUTDIR, f"{name}.json")
     meta = {"name": name, "viewport": [900, 600]}
     try:
-        data = SCENES[name]()
+        data = draw(name)
         meta["draw_ok"] = True
         meta["render_data_summary"] = summarize(data)
     except Exception:
