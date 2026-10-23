@@ -267,12 +267,16 @@ class Camera:
 
     @classmethod
     def from_render_data(cls, render_data, *, width, height, **kwargs):
-        """A camera for one ``BuildRenderData`` result, honouring its ``gui_settings``."""
-        settings = render_data.get("gui_settings", {}).get("camera", {}) or {}
+        """A camera for one ``BuildRenderData`` result, honouring its ``gui_settings``.
+
+        A keyword given here wins over the recorded one, which is how a script keeps a
+        payload and still picks the angle it wants.
+        """
+        recorded = render_data.get("gui_settings", {}).get("camera", {}) or {}
+        recorded = {key: value for key, value in recorded.items()
+                    if key in ("euler_angles", "transformations")}
         return cls(render_data["mesh_center"], render_data["mesh_radius"],
-                   width=width, height=height,
-                   euler_angles=settings.get("euler_angles"),
-                   transformations=settings.get("transformations"), **kwargs)
+                   width=width, height=height, **recorded, **kwargs)
 
     @property
     def aspect(self):

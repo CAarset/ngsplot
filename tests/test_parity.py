@@ -3,8 +3,9 @@
 ``tools/capture_gt.py`` renders each scene in Chromium with the real ``ngsolve.webgui``
 and records, next to the screenshot, the render data it handed the page and the uniforms
 the materials ended up with.  A scene here therefore needs neither ngsolve nor a
-browser: the recorded render data goes through ngsplot's own geometry, camera and
-rasterizer, and the two pictures are compared byte for byte.
+browser: the recorded render data goes through :func:`ngsplot.scene.paint`, the entry
+point a script calls, with no keyword given to it, and the two pictures are compared
+byte for byte.
 
 Where they are compared, and why not everywhere:
 
@@ -42,7 +43,7 @@ import pytest
 from numpy.lib.stride_tricks import sliding_window_view
 
 import gtdata
-from ngsplot import camera, geometry, raster
+from ngsplot import scene as scene_module
 
 # every scene in tests/gt that draws a surface; scenes without one are covered elsewhere
 SCENES = ["square_scalar", "square_no_wireframe", "square_rotated", "square_deformed",
@@ -63,54 +64,25 @@ def levels(canvas):
 
 
 @functools.lru_cache(maxsize=None)
-def render(scene, lines):
-    """The scene through ngsplot: the canvas, the recorded picture, our surface alone.
+def _draw(scene, lines):
+    """The scene through :func:`ngsplot.scene.paint`, as a canvas.
 
-    Cached, because a scene is rendered twice -- once for its own sake and once as the
-    background the lines are measured against -- and nothing here writes to a canvas.  Pass
-    ``lines=False`` for the surface on its own; the picture is always the whole recording.
+    ``lines=False`` is the same draw with both kinds of line switched off, which is the
+    background the ink of a line is measured against; with ``lines`` left alone the
+    picture is whatever the payload's own settings say, wireframe included.  Cached,
+    because a scene is drawn twice and nothing here writes to a canvas.
     """
     render_data = gtdata.render_data_of(scene)
-    uniforms = gtdata.uniforms_of(scene)
     width, height = gtdata.framebuffer_of(scene)
-    view = camera.Camera.from_render_data(render_data, width=width, height=height)
-    order = geometry.order_of(render_data)
-    ctrl, vectors = geometry.trig_points(render_data)
-    canvas = raster.Canvas(width, height)
-    raster.paint_surface(
-        canvas, view, order, ctrl,
-        vmin=uniforms["colormap_min"], vmax=uniforms["colormap_max"],
-        pal=np.array(uniforms["tex_colormap"]["data"], dtype=np.float64).reshape(-1, 4)[:, :3],
-        n_segments=uniforms["n_segments"],
-        function_mode=uniforms["function_mode"],
-        dark_backside=uniforms["dark_backside"],
-        vectors=vectors,
-        # draw_surf reaches the page as null for a plain Draw, and only an explicit false
-        # defines NO_FUNCTION_VALUES: null == false is false in JavaScript
-        function_values=render_data.get("draw_surf") is not False,
-        deformation=float(uniforms.get("deformation", 0.0)),
-        mode=raster.deformation_mode(render_data["mesh_dim"], render_data["funcdim"]))
-    surface = levels(canvas)          # taken before any line is painted: the background
+    without = {} if lines else {"wireframe": False, "edges": False}
+    return scene_module.paint(render_data, width=width, height=height, **without)
 
-    if lines:
-        # a `deformation` of true in the render data means the geometry was sent flat and
-        # lifted in the shader, so the lines have to be lifted by us the same way; a
-        # CoefficientFunction deformation is already folded into the line vertices by
-        # ngsolve itself (webgui.py:343) and must not be lifted twice
-        lift = float(uniforms["deformation"]) if render_data["deformation"] is True else 0.0
-        mode = raster.deformation_mode(render_data["mesh_dim"], render_data["funcdim"])
-        objects = gtdata.settings_of(scene).get("Objects", {})
-        if objects.get("Edges", True) and render_data.get("edges"):
-            raster.paint_edges(
-                canvas, view, order, geometry.edge_points(render_data)[0],
-                n_segments=uniforms["n_segments"], line_thickness=uniforms["line_thickness"],
-                deformation=lift, mode=mode)
-        if objects.get("Wireframe", True) and render_data.get("Bezier_points"):
-            raster.paint_wireframe(
-                canvas, view, order, geometry.wireframe_points(render_data)[0],
-                n_segments=uniforms["n_segments"], deformation=lift, mode=mode)
-    picture = gtdata.png_of(scene)[:height, :width, :3].astype(int)
-    return canvas, picture, surface
+
+def render(scene, lines):
+    """The scene through ngsplot: the canvas, the recorded picture, our surface alone."""
+    canvas = _draw(scene, lines)
+    picture = gtdata.png_of(scene)[:canvas.height, :canvas.width, :3].astype(int)
+    return canvas, picture, levels(_draw(scene, False))
 
 
 def rasterize(scene):
