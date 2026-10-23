@@ -73,7 +73,7 @@ are fitted once and not twice — `GenerateHTML` builds them a second time.
 
 ## Laying the picture on matplotlib
 
-`ngsplot.pyplot` decides nothing about how a function looks.  It hands what `plot` was given to
+`ngsplot.pyplot` decides nothing about how a function looks.  It hands what `Plot` was given to
 `_ngsolve.render_data`, hands the payload to `scene.paint`, and lays the resulting array on an
 `Axes.imshow`; every word after that is matplotlib's.  Three numbers fix the frame: `WIDTH = 900`
 and `HEIGHT = 600`, the size the page's canvas is given, and `DPI = 100`, so the figure is 9 by 6
@@ -88,16 +88,16 @@ figure because the picture *is* the plot; an axis made by someone else keeps wha
 never stretched, and gives room away rather than taking any, as any image does.
 
 The keywords are sorted by who reads them, from the signatures rather than from a list: every
-name `scene.paint` and `Camera.__init__` takes is a keyword of `plot` and goes to the painter,
+name `scene.paint` and `Camera.__init__` takes is a keyword of `Plot` and goes to the painter,
 and the rest goes to `Draw`, so `order`, `draw_vol`, `objects`, `settings` and `nodal_p1` keep
 their meaning and a payload that is already built refuses them by name instead of ignoring them
 silently.  Two names need a rule of their own.  `deformation` is a flag on the payload side and
 an amount on the painter's, so a number is sent in as `deformation=True, scale=<float>` — see the
 `NgException` above — while a payload that is already built can only be lifted at the painter.
 Either way the payload's flag is what the painters switch on, and it is load-bearing: lifting by
-the amount alone paints a measurably different picture, so `plot` makes sure the flag reaches
+the amount alone paints a measurably different picture, so `Plot` makes sure the flag reaches
 `Draw` and passes the amount on to the painter as well.
-`eval` is the keyword `Draw` cannot spell; `plot` takes it under the panel's own names and writes
+`eval` is the keyword `Draw` cannot spell; `Plot` takes it under the panel's own names and writes
 it as `function_mode`, the same knob.
 
 A colourbar cannot be built on the picture, and matplotlib says so twice over.  The array of an
