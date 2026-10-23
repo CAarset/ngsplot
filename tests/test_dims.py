@@ -7,10 +7,9 @@ findings of that document decide what a test may ask of each.
 
 * The recorded screenshots are of a *page*, so they carry axes and a colourbar that ngsplot
   leaves to matplotlib.  The comparison is made inside the mesh, away from that furniture.
-* A complex function arrives as two real components and is then indistinguishable from a
-  vector field -- ``complex_h1`` and ``cf_vector`` have payloads of the same shape and want
-  opposite pictures.  The caller has to say which it is; where it does, the recording comes
-  out of the other end.
+* A complex function arrives as two real components, but it says so while doing it, and
+  that word -- not the caller's keyword -- is what decides whether the real part or the
+  length of the pair is plotted.  It is painted from its payload like every other scene.
 * A 1D draw never reaches the surface code, and that is where ngsolve accumulates its value
   range, so a 1D payload arrives with the sentinel pair ``(DBL_MAX, DBL_MIN)`` and the
   function itself is not drawn at all: what is recorded is a flat black line over the mesh.
@@ -77,6 +76,12 @@ def assert_like_recording(canvas, picture, where):
     assert fraction < 0.02, f"{100 * fraction:.2f}% of the pixels differ by more than 8"
 
 
+def looks_like_recording(canvas, picture, where):
+    """Whether ``assert_like_recording`` would pass -- for the assertions about difference."""
+    median, mean, fraction = disagreement(canvas, picture, where)
+    return median == 0 and mean < 0.5 and fraction < 0.02
+
+
 SPANS = {
     # scene: (mesh_dim, funcdim, draw_vol) as the payload says
     "dims/line_scalar": (1, 1, False),
@@ -101,7 +106,7 @@ def test_the_captures_span_every_mesh_dimension_and_kind_of_input():
 
 
 SPACES = ["dims/numberspace", "dims/numberspace_l2pwc", "dims/cf_mesh", "dims/cf_vector",
-          "dims/vec_hcurl", "dims/volume_scalar"]
+          "dims/vec_hcurl", "dims/complex_h1", "dims/volume_scalar"]
 
 
 @pytest.mark.parametrize("name", SPACES)
@@ -169,21 +174,29 @@ def test_a_number_space_is_the_one_flat_colour_the_page_showed():
     assert blue > 100 and green < 40, "the zero band of the ramp is blue, not anything else"
 
 
-def test_a_complex_function_has_to_be_told_apart_from_a_vector_one():
-    """Nothing in the payload says complex, so the caller says it; both answers are on record.
+def test_a_complex_payload_says_so_and_the_caller_can_overrule_it():
+    """The payload names a complex function; the keyword is there to overrule it, not to supply it.
 
-    ``complex_h1`` and ``cf_vector`` differ by little more than which function of the two
-    components is plotted: real part versus length of the pair.  Without the flag the length
-    is drawn, which is a different picture by a long way, and with it the recording is
-    reproduced like any other scene.
+    ``BuildRenderData`` splits a complex function into real and imaginary parts and writes
+    ``is_complex`` beside the two of them (``ngsolve/webgui.py:303-305``), and the panel answers
+    that flag with mode 5, the real part, where a plain two-component field gets mode 3, the
+    length.  So a complex scene draws itself correctly with no keywords at all -- and a caller
+    who hands over a real/imaginary pair that the payload cannot identify, or who would rather
+    see the length of a complex one, is what the keyword is for.
     """
-    canvas, picture = draw("dims/complex_h1", is_complex=True)
+    assert gtdata.render_data_of("dims/complex_h1")["is_complex"] is True
+    canvas, picture = draw("dims/complex_h1")
     inside = interior(canvas) & ~grown(picture.max(axis=2) < 90)
     assert_like_recording(canvas, picture, inside)
 
-    plain, _ = draw("dims/complex_h1")
-    median, mean, fraction = disagreement(plain, picture, inside)
-    assert mean > 20 and fraction > 0.2, f"mode 3 came out too close: {mean}"
+    overruled, _ = draw("dims/complex_h1", is_complex=False)
+    assert not looks_like_recording(overruled, picture, inside), "mode 3 came out like mode 5"
+
+    # ... and the other way round: a vector field the caller insists on calling complex
+    vector, recorded = draw("dims/cf_vector")
+    inside = interior(vector) & ~grown(recorded.max(axis=2) < 90)
+    assert looks_like_recording(vector, recorded, inside)
+    assert not looks_like_recording(draw("dims/cf_vector", is_complex=True)[0], recorded, inside)
 
 
 def test_the_surface_capture_agrees_with_the_page_in_outline_only():
