@@ -36,6 +36,11 @@ there is no C in the drawing path at all. The friction comes from Draw being a
   (`netgen/webgui.py:564-573`), so `Draw(gfu, eval="norm")` is silently dropped and
   `Draw(gfu, eval_="norm")` dies with `KeyError: 'eval'`. The mode is otherwise a widget
   control — which is to say that on the Python side it is unreachable.
+* The panel's deformation slider is two payload fields, `deformation` and `deformation_scale`,
+  and `Draw`'s `deformation` takes only a displacement field or a bool. The amount belongs in
+  `scale`: `Draw(gfu, deformation=0.7)` answers `NgException: Dimensions don't match, op = +
+  dims1 = 0: 3, dims2 = ` because the float is read as a CoefficientFunction to add to the
+  geometry.
 
 So: the clunkiness is *live-control GUI + racy async transport*, inherited from an
 interactive-tool heritage (Netgen's GUI) rather than from C.
@@ -65,6 +70,51 @@ positionally and raises `Cannot draw CoefficientFunction without mesh`
 `show` and `filename` are the two keywords the seam does not pass on; they belong to the window
 it never opens. `widget.value` is read instead of calling `GetData()` again so that the arrays
 are fitted once and not twice — `GenerateHTML` builds them a second time.
+
+## Laying the picture on matplotlib
+
+`ngsplot.pyplot` decides nothing about how a function looks.  It hands what `plot` was given to
+`_ngsolve.render_data`, hands the payload to `scene.paint`, and lays the resulting array on an
+`Axes.imshow`; every word after that is matplotlib's.  Three numbers fix the frame: `WIDTH = 900`
+and `HEIGHT = 600`, the size the page's canvas is given, and `DPI = 100`, so the figure is 9 by 6
+inches and a `savefig` at the figure's own dpi writes the renderer's array byte for byte — the
+outermost row and column included, measured as a maximum difference of 0 against
+`matplotlib.image.imread`.  That is what makes a loop of frames an animation rather than a blur,
+and it needs no cropping step: an image with `interpolation="nearest"` at a 1:1 device mapping
+puts its texels exactly where they were painted.  The extent is in the page's own pixels, so the
+rulers of an axis would count pixels too, which is why a plot takes the frame away;
+`set_axis_on()` puts them back for whoever means them.  An axis made for a picture covers the
+figure because the picture *is* the plot; an axis made by someone else keeps what was on it, is
+never stretched, and gives room away rather than taking any, as any image does.
+
+The keywords are sorted by who reads them, from the signatures rather than from a list: every
+name `scene.paint` and `Camera.__init__` takes is a keyword of `plot` and goes to the painter,
+and the rest goes to `Draw`, so `order`, `draw_vol`, `objects`, `settings` and `nodal_p1` keep
+their meaning and a payload that is already built refuses them by name instead of ignoring them
+silently.  Two names need a rule of their own.  `deformation` is a flag on the payload side and
+an amount on the painter's, so a number is sent in as `deformation=True, scale=<float>` — see the
+`NgException` above — while a payload that is already built can only be lifted at the painter.
+Either way the payload's flag is what the painters switch on, and it is load-bearing: lifting by
+the amount alone paints a measurably different picture, so `plot` makes sure the flag reaches
+`Draw` and passes the amount on to the painter as well.
+`eval` is the keyword `Draw` cannot spell; `plot` takes it under the panel's own names and writes
+it as `function_mode`, the same knob.
+
+A colourbar cannot be built on the picture, and matplotlib says so twice over.  The array of an
+`AxesImage` of a plotted Draw holds *colours*, not values, and when a mappable is passed,
+`Figure.colorbar` reads `cmap` and `norm` off that mappable and ignores the keywords
+(`colorbar.py:304-308`) — a bar driven by the picture prints viridis at 256 bands.  So
+`pyplot.colorbar` keeps the texture and the two ends each picture was painted with and drives the
+bar from a private `ScalarMappable`: a `ListedColormap` of exactly those texels under a
+`BoundaryNorm` on their band edges, so the bar shows the bands that are on the picture and ticks
+at the boundaries between them, which is the scale the panel's two fields hold.  Nothing is
+registered in `matplotlib.colormaps`.  A bar laid on an axis takes room out of it even when it is
+given a `cax` of its own; the `ax=` route shrinks a full-bleed axis to `(0, 0.1, 0.8, 0.9)` and
+that is the one thing a picture gives up without being asked.  `Axes` has no `colorbar` attribute,
+so the function hands the `Colorbar` back.
+
+Plotting twice into one axis replaces the picture, and its bar with it, so a time loop is one
+line and does not stack images on the axis.
 
 ## Geometry: exact, not sampled
 
@@ -122,7 +172,8 @@ ctrl   = inv(B) @ samples          # B rows: samples at (ix/n, iy/n); cols: name
 
 with the row and column indices running through the identical enumeration (outer 0..n,
 inner 0..n-outer), `inv(B)` cached per element type in `netgen.webgui._bernstein_cache`.
-Then `ngsplot.geometry.trig_points` unpacks base64 float32 arrays (`decode_array`):
+Then `ngsplot.geometry.trig_points` unpacks base64 float32 arrays (`decode_array`, the Python
+counterpart of the page's `readB64`, `utils.ts:209`):
 
 | list | rows | arrays | components |
 | --- | --- | --- | --- |
@@ -230,7 +281,9 @@ payload, `funcdim = 0`) uploads those region colours instead — `makeEdgeColors
 (`edges.ts:6-21`) packs them as RGBA texels, `(width, height) = (min(n,1024),
 ceil(n/width))`, alpha 1 — so the one-region unit square sends a **single green texel**
 (`tests/gt/mesh_only.json`) and `colormap_size` stays `(1, 1)`. The colorbar is hidden:
-the bar's measured rectangle is untouched white in that scene.
+the bar's measured rectangle is untouched white in that scene. Under the fixed light that green
+comes out around `(0, 61, 1)` in the ground-truth PNG, so a test that asks whether a mesh-only
+draw is green asks for dominance of the green channel, not for the texel's own value.
 
 ## Shading: per-fragment Phong in view space
 
@@ -263,6 +316,11 @@ boundaries stay hard. `alpha = color.w = 1` for surfaces; `NO_FUNCTION_VALUES` p
 `(0.7, 0.7, 0.7)` before lighting, and it is defined exactly when `data.draw_surf ===
 false` (`mesh.ts:51`) — the `null` a plain `Draw` sends is *not* `false`, so an ordinary
 mesh draw is coloured by its region colour, not greyed out.
+
+A shader writes into an 8-bit framebuffer, so the sum above is clamped on the way out; the float
+`Canvas.color` of the software rasteriser is not clamped and reaches 1.21 inside
+`tests/gt/dims/cf_mesh`. That is why a picture is compared, and handed to matplotlib, through
+`Canvas.to_uint8()` and never through the raw float array.
 
 ## Camera
 
