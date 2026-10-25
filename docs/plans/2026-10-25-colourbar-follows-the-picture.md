@@ -61,7 +61,7 @@ behaviour named.
 | `docs/SPEC.md` | what every pixel and every knob is doing | colourbar paragraphs `:103-117` amended |
 | `README.md` | the two-minute tour | one clause at `:38-46` that the bar is sized to the picture and stands through a repaint |
 | `examples/ngsplot.ipynb` | the demo, outputs committed (26 PNGs) | re-executed once the bar looks right |
-| `pyproject.toml` | floors | matplotlib floor raised to the mpl that introduced `Colorbar.update_normal(mappable)` |
+| `pyproject.toml` | floors | unchanged: the mechanism is as old as `use_gridspec` colourbars, so no newer matplotlib is asked for (see Task 3) |
 | `/home/aarset/.dsh/skills/ngsolve/references/ngsolve.md` | the conventions reference (outside the workspace: needs an approved wider-access write) | the colourbar/repaint convention recorded; mirror re-synced to `.scratch/ngsolve-skill/` |
 
 Bookkeeping today: `_bars` is an `Axes -> [Colorbar]` list written at `pyplot.py:235` and read only
@@ -69,12 +69,15 @@ by `_retire` (`:310-318`) — verified by grep, so reshaping its value touches t
 
 ## Validated numbers (one run, `.venv`, matplotlib 3.11.2)
 
-Reproduced the report exactly, then the rule:
+Reproduced the report exactly, then the rule.  The mpl-defaults column is the old
+behaviour, reproduced in the same run by naming the three numbers matplotlib uses when nobody names
+them (`fraction=0.15, shrink=1.0, aspect=20`); the picture sizes are the letterbox the axes shows,
+read after a draw:
 
 | path | mpl defaults | derived rule |
 | --- | --- | --- |
-| bare axes, 3:2 raster (our default figure) | bar **1.25×** the picture tall, 4.2% of it wide | bar **1.00×** tall, 3.3% wide; picture 9.60×5.60 → 10.63×6.20 in |
-| 2×3 panel, 15.6×8.6 in figure (the MRAS live view) | bar **1.59×** the picture tall, 5.3% wide | bar **1.00×** tall, 3.3% wide; picture 2.19×1.54 → 2.42×1.71 in |
+| bare axes, 3:2 raster (our default figure) | bar **1.25×** the picture tall, 4.2% of it wide | bar **1.00×** tall, 3.3% wide; picture 7.20×4.80 → 7.97×5.32 in |
+| 2×3 panel, 15.6×8.6 in figure (the MRAS live view) | bar **1.59×** the picture tall, 5.3% wide | bar **1.00×** tall, 3.3% wide; picture 2.84×1.90 → 3.15×2.10 in |
 | horizontal bar | 112.5% of the picture wide | 100.1% |
 | six repaints into one panel, one axes | anchor width 0.1824 → 0.1459 → 0.1167 → 0.0934 → 0.0747 → 0.0598 (×0.8/frame) | **0.1824 constant**, one `<colorbar>` axes throughout |
 
@@ -249,7 +252,7 @@ figure whose picture fills its box keeps looking exactly as it does now: **the b
 the picture is drawn, and at most 8% of the picture's own width across** (the reporter's number for
 the second one; the first is the defect).
 
-- [ ] Failing test:
+- [x] Failing test:
 
 ```python
 def test_a_colourbar_is_as_tall_as_the_picture_and_no_wider_than_a_share_of_it():
@@ -281,7 +284,7 @@ def test_the_room_named_for_a_colourbar_is_the_room_it_gets():
 Run: the first fails at `bar.height/picture.height == 1.59`; the second passes and stays as the
 guard on the derivation.
 
-- [ ] Add the constant beside `DPI` (`:66-69`) and the geometry function at the file's foot:
+- [x] Add the constant beside `DPI` (`:66-69`) and the geometry function at the file's foot:
 
 ```python
 #: the widest a colourbar gets, as a share of the width of the picture it keys
@@ -336,7 +339,7 @@ mpl accepts `fraction=0` and a `shrink` of `1e-9` without complaint (measured), 
 cell yields a degenerate bar rather than an exception, and the guard above covers the non-finite
 cases.
 
-- [ ] `colorbar` derives once per call and reuses on a fit: hold `"geometry"` in the `_bars`
+- [x] `colorbar` derives once per call and reuses on a fit: hold `"geometry"` in the `_bars`
       record; compute `geometry = _bar_geometry(image, kwargs)`; the reuse branch additionally
       requires `_fits(standing["geometry"], geometry)`, and stores the geometry it settled on; the
       build branch passes `**geometry` to `fig.colorbar` and stores it:
@@ -354,17 +357,19 @@ An added `import math` at the head of the file. A repaint at a fixed size derive
 so an animation never rebuilds; a resize re-carves from a cell that `remove()` restored (Task 1),
 so it cannot compound.
 
-- [ ] Run the two tests, then the file, then the suite;
+- [x] Run the two tests, then the file, then the suite;
       `test_a_plot_can_ask_for_a_colourbar_and_makes_room_for_it` must still pass (`fraction`
       0.064 keeps `width < 1.0`).
-- [ ] Produce the contact sheet for review: a 2×3 figure at 15.6×8.6 in with
+- [x] Produce the contact sheet for review: a 2×3 figure at 15.6×8.6 in with
       `Plot(payload, ax=panel, colorbar=True)` in every panel, saved before the change (`git
       stash`) and after, to `.scratch/bar-before-after.png` (gitignored). Check the picture in each
       panel got *bigger* as well as the bar matching its height.
-- [ ] Raise the matplotlib floor in `pyproject.toml:11` to the release that gave
-      `Colorbar.update_normal` its `mappable` argument — confirm against the 3.6/3.7 changelog in
-      the step, and write the number found, not a guess.
-- [ ] Commit: subject along "A colourbar is measured against the picture it keys rather than the
+- [x] **No floor was raised**: `lib/matplotlib/colorbar.py` at the tags `v3.4.0`, `v3.5.0` and
+      `v3.6.0` has `def update_normal(self, mappable)` and the `ax = self.mappable.axes` restore in
+      `remove()` in all three, so the mechanism is as old as `use_gridspec` colourbars and nothing
+      here needs a newer matplotlib than the layer already assumed.  `pyproject.toml:11` is left
+      with no floor; the code was checked to raise no `DeprecationWarning` under matplotlib 3.11.
+- [x] Commit: subject along "A colourbar is measured against the picture it keys rather than the
       cell it shares with it", body with the two measured ratios from the table above (both from
       one run), the aspect/fraction dual cap and why (width comes from `aspect` in a plain
       gridspec, from `fraction` under constrained layout — same result either way), and the two
