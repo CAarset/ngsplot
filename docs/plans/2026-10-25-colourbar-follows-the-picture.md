@@ -93,6 +93,10 @@ constrained layout — measured identical results in both regimes, which is why 
 **both**.
 
 ## Task 1 — A removed colourbar gives its room back
+> Shipped in `207ec1e`: the anchor is `mappable.axes = image.axes` (`src/ngsplot/pyplot.py:269`),
+> which is what makes `Colorbar.remove()` restore the cell, and the guard is the room-hands-back
+> test in `tests/test_pyplot.py`.  The plan file itself went in with that commit, as its first
+> line asked.
 
 `Colorbar.remove()` does `self._ax_remove(self.ax)` (the bar's axes does go away) and then
 `try: ax = self.mappable.axes / except AttributeError: return` (`colorbar.py:1065`) before
@@ -100,8 +104,8 @@ restoring the parent's `SubplotSpec`. Our `ScalarMappable` has no `axes` attribu
 `set_axes` in 3.11.2, so the restore is skipped silently and every repaint leaves 0.8 of the
 leftover cell behind.
 
-- [ ] Save this plan to `docs/plans/2026-10-25-colourbar-follows-the-picture.md`.
-- [ ] Write the failing test in `tests/test_pyplot.py`, after
+- [x] Save this plan to `docs/plans/2026-10-25-colourbar-follows-the-picture.md`.
+- [x] Write the failing test in `tests/test_pyplot.py`, after
       `test_the_layer_registers_no_colormap_anywhere` (`:248`):
 
 ```python
@@ -118,27 +122,32 @@ def test_a_colourbar_removed_gives_the_room_it_took_back():
     assert panel.get_subplotspec().get_position(figure).width == pytest.approx(room)
 ```
 
-- [ ] Run it, confirm it fails with the width stuck at 0.8 of `room`:
+- [x] Run it, confirm it fails with the width stuck at 0.8 of `room`:
       `timeout 300 nice -n 10 .venv/bin/python -m pytest tests/test_pyplot.py -q -p no:randomly -k removed_gives`.
-- [ ] In `colorbar`, one line after `mappable.set_array([])` (`pyplot.py:232-234`):
+- [x] In `colorbar`, one line after `mappable.set_array([])` (`pyplot.py:232-234`):
 
 ```python
     mappable.axes = image.axes    # Colorbar.remove reads the axis to restore off the mappable
 ```
 
-- [ ] Re-run: green. Full file: `.venv/bin/python -m pytest tests/test_pyplot.py -q -p no:randomly`.
-- [ ] Commit: `git add -A && git commit` — subject along "A colourbar hands its mappable the axis
+- [x] Re-run: green. Full file: `.venv/bin/python -m pytest tests/test_pyplot.py -q -p no:randomly`.
+- [x] Commit: `git add -A && git commit` — subject along "A colourbar hands its mappable the axis
       it keys, which is the only way matplotlib will give the room back", body naming
       `colorbar.py:1065`, the measured 0.8-of-cell leftover, and
       `test_a_colourbar_removed_gives_the_room_it_took_back`.
 
 ## Task 2 — One colourbar per axis, repainted where it stands
+> Shipped in `207ec1e`: `_bars` holds one record per axis (`src/ngsplot/pyplot.py:92`), a repaint
+> retargets it with `update_normal` (`:261`), `_retire(axes, keep_bar=...)` (`:467`) removes the bar
+> only when the picture stops asking for one, and `_stands` (`:478`) with `_same_ask` (`:489`) are
+> the two helpers that decide whether the bar that stands can be reused.  Boxes ticked at the
+> record commit, which is where the plan's own state was reconciled.
 
 Carving and restoring the cell on every frame is churn even when it works: it reallocates an `Axes`
 per frame (the same class of leak as the widget one closed in `37715f6`) and it re-enters
 `gridspec` arithmetic every repaint. The bar stands and is retargeted instead.
 
-- [ ] Failing tests, added after Task 1's:
+- [x] Failing tests, added after Task 1's:
 
 ```python
 def test_repainting_a_colourbar_keeps_the_room_it_took_the_first_time():
@@ -186,12 +195,12 @@ def test_a_picture_that_stops_asking_for_a_colourbar_gives_the_room_back():
     assert not [bar for bar in figure.axes if bar.get_label() == "<colorbar>"]
 ```
 
-- [ ] Run them: the first two fail (the anchor width walks 0.1824 → 0.0598; `bar.cmap.N` stays 5
+- [x] Run them: the first two fail (the anchor width walks 0.1824 → 0.0598; `bar.cmap.N` stays 5
       because the object is removed and a new bar built), the third passes already thanks to
       Task 1 — keep it as the guard that a dropped bar is a *true* restore.
-- [ ] Reshape the bookkeeping. `_bars` value becomes one record, not a list; the comment at `:85`
+- [x] Reshape the bookkeeping. `_bars` value becomes one record, not a list; the comment at `:85`
       reads `# Axes -> the colourbar standing next to it, and what it was built from`.
-- [ ] Two helpers beside `_retire`. `_standing` is needed because `bar.ax.get_figure()` still
+- [x] Two helpers beside `_retire`. `_standing` is needed because `bar.ax.get_figure()` still
       returns the figure after `fig.delaxes` (measured) — only membership in `figure.axes` says a
       bar is still installed; and a removed bar must never be removed again (`KeyError`):
 
@@ -209,7 +218,7 @@ def _same_ask(had, wants):
     return repr(had) == repr(wants)
 ```
 
-- [ ] `colorbar` becomes: derive the palette, the `ListedColormap` and the `BoundaryNorm` as now;
+- [x] `colorbar` becomes: derive the palette, the `ListedColormap` and the `BoundaryNorm` as now;
       ask whether the standing bar will do; if so push the ramp and the scale into *its own*
       mappable and retarget it; otherwise retire it and build a new one. The reuse branch is
       matplotlib's own animation path — `update_normal` re-reads `cmap` and `norm`, calls
@@ -234,12 +243,12 @@ def _same_ask(had, wants):
     return bar
 ```
 
-- [ ] `_retire(axes, keep_bar=False)`: pop the record and remove the bar only when `keep_bar` is
+- [x] `_retire(axes, keep_bar=False)`: pop the record and remove the bar only when `keep_bar` is
       false. `Plot` passes `_retire(axes, keep_bar=bool(colorbar))` and still calls
       `_colorbar(image)` after the new picture is laid down — inside `Plot` the `colorbar` keyword
       shadows the function, which is why the `_colorbar = colorbar` alias exists.
-- [ ] Run the three tests, then the file, then the suite. Expect 430 passed, 1 skipped.
-- [ ] Commit: subject along "A repaint retargets the colourbar that stands instead of building
+- [x] Run the three tests, then the file, then the suite. Expect 430 passed, 1 skipped.
+- [x] Commit: subject along "A repaint retargets the colourbar that stands instead of building
       another one", body naming `update_normal`, the 0.1824 → 0.0598 walk against the constant
       now, the `get_figure()` lie that `_standing` works around, and the three test names.
 
@@ -413,27 +422,31 @@ painted width, since the bar is long where the mesh is wide — where it ran 112
 
 ## Task 4 — The record, the demo, the reference
 
-- [ ] `docs/SPEC.md:103-117`: keep the "a colourbar cannot be built on the picture" argument;
-  replace the closing sentence of the geometry paragraph and the `:116-117` repaint paragraph so
-  they state what is now true — the bar is anchored to its mappable, it stands through a repaint
-  and is retargeted, the room it takes is `shrink`/`fraction`/`aspect` derived from the letterbox
-  with `BAR_SHARE` as the cap, a caller's own numbers win, and a picture that stops asking for a
-  bar gets its room back.
-- [ ] `README.md:38-46`: one clause — a bar is sized to the picture and survives the repaints of a
-  time loop.
-- [ ] Re-execute the demo so its committed outputs show the new bar:
-  `nice -n 10 .venv/bin/jupyter-execute --inplace examples/ngsplot.ipynb` (nbclient 0.11.0 is in
-  `.venv`). If a cell errors or the kernel is missing, stop and report rather than committing
-  half-updated outputs.
-- [ ] Record the convention in `/home/aarset/.dsh/skills/ngsolve/references/ngsolve.md` (Pictures
-  section: one bar per axis, `update_normal` to retarget, geometry derived from the letterbox,
-  `mappable.axes` is what makes `remove()` restore) — outside the workspace, so the write needs an
-  approved `danger-full-access` retry — and re-sync the mirror: `cp` the skill and reference into
-  `.scratch/ngsolve-skill/`, then `diff -rq` the two trees for identical.
-- [ ] Full suite one last time (expect 432 passed, 1 skipped) plus `git status` clean; then
-  `present` the contact sheet.
-- [ ] Commit: subject along "The record says what a colourbar is now measured against", body
-  listing SPEC/README/notebook/reference.
+- [x] `docs/SPEC.md`: kept the "a colourbar cannot be built on the picture" argument; the geometry
+  paragraph now says a bar is as long as the mesh is painted across the axis, names
+  `pyplot.BAR_SHARE` as the width cap and `pyplot.BAR_MIN_PAINT` as the line rule, and states that
+  the room is asked for as the bar's own width so the `aspect` and `fraction` routes agree; the
+  repaint paragraph says the bar is retargeted through `update_normal` and hands its room back
+  through the axis on its mappable.
+- [x] `README.md`: one clause — a bar is measured against the picture it keys and stands through a
+  repaint, so a panel that redraws every frame keeps the width it was given.
+- [x] Re-executed the demo so its committed outputs show the new bar
+  (`nice -n 10 .venv/bin/jupyter-execute --inplace examples/ngsplot.ipynb`, with `JUPYTER_*` and
+  `MPLCONFIGDIR` pointed under `.scratch/` because `~/.jupyter` is not writable), then stripped the
+  `execution` metadata back out so the committed notebook keeps its `"metadata": {}` and the diff is
+  outputs only: 30 insertions, 30 deletions.  It went in with the code commit, since its bar is the
+  evidence of the rule.
+- [x] Recorded the convention in `/home/aarset/.dsh/skills/ngsolve/references/ngsolve.md`, under
+  "Pictures in a script": the bar keys the painted share of the raster rather than the raster, the
+  matplotlib defaults measured 2.45x too tall and 12% too wide in a live-view panel, a repaint
+  retargets the bar that stands, and `mappable.axes` is what lets `remove()` put the room back —
+  the write needed an approved `danger-full-access` retry.  Mirror re-synced and `diff -rq` clean.
+- [x] Full suite one last time: 435 passed, 1 skipped in 122.71s; `git status` clean after the
+  record commit.
+- [x] Commit: "The record says what a colourbar is measured against", body listing SPEC, README and
+  the skill reference.
+- [x] `present` the contact sheet `.scratch/bar-before-after.png` beside the summary, together with
+  `.scratch/notebook-cell04.png` as the demo panel it came from.
 
 ## Out of scope
 

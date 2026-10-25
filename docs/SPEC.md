@@ -110,11 +110,33 @@ bar from a private `ScalarMappable`: a `ListedColormap` of exactly those texels 
 at the boundaries between them, which is the scale the panel's two fields hold.  Nothing is
 registered in `matplotlib.colormaps`.  A bar laid on an axis takes room out of it even when it is
 given a `cax` of its own; the `ax=` route shrinks a full-bleed axis to `(0, 0.1, 0.8, 0.9)` and
-that is the one thing a picture gives up without being asked.  `Axes` has no `colorbar` attribute,
-so the function hands the `Colorbar` back.
+that is the one thing a picture gives up without being asked.  The room is measured against the
+picture rather than the room the two share, because the picture keeps the shape it was painted in
+and leaves the rest of that room empty, and because the renderer fits a mesh into the raster it is
+asked for and leaves the page's own colour around it: a bar is as long as the mesh is painted across
+the axis, and no wider than `pyplot.BAR_SHARE` (8%) of it, both as caps, so a picture that filled
+its cell gets a bar as long as its cell while one that letterboxed gets a bar as long as itself.
+The painting is read out of the array by colour — the four corners of a raster are page, and a row
+unlike every one of them holds mesh — over every eighth pixel, and a picture painted across under
+`pyplot.BAR_MIN_PAINT` (25%) of its canvas is a line: a bar the length of a line keys nothing, so
+there the canvas stands for the picture.  `shrink` fixes the length exactly, and the room is asked
+for as the width the bar will be, since a plain gridspec draws a bar as wide as its length over
+`aspect` while a tight or constrained layout makes the width out of `fraction` instead, and since
+matplotlib cuts a bar to the width of its room times `aspect`: a room narrower than the bar shortens
+it, and a room of the bar's own width is the one width both routes agree on.  Whatever room a caller
+names is the room the bar gets, and a bar with a `cax` of its own is sized by whoever made that.
+`Axes` has no `colorbar` attribute, so the function hands the `Colorbar` back.
 
-Plotting twice into one axis replaces the picture, and its bar with it, so a time loop is one
-line and does not stack images on the axis.
+Plotting twice into one axis replaces the picture, and its bar with it rather than laying a second
+bar beside it, so a time loop is one line, does not stack images on the axis, and does not narrow
+the panels of a live view a frame at a time.  The bar that stands there is told that what it keys
+has changed — `Colorbar.update_normal`, matplotlib's own way — which follows a new texture, a
+new range and a different number of bands without touching the layout; a bar asked for in other
+words than the one standing there was asked for is built again.  A bar gives its room back to the
+axis it reads off its mappable, and a private mappable has no axis of its own, so the layer gives
+it the one the picture sits in; without that the room is gone for good, since a removed bar leaves
+the narrowed cell where it put it, and a picture that stops asking for a bar keeps a quarter of
+its width taken by a bar that is no longer there.
 
 ## Geometry: exact, not sampled
 

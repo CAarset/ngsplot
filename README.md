@@ -37,7 +37,9 @@ A picture is one `AxesImage` holding the renderer's own array, laid on an axis t
 figure, so everything matplotlib does from there still works: `Plot(gfu, ax=ax)` into anybody's
 `subplots` or `gridspec`, `pyplot.colorbar` on the last picture or a given one, `cla()` and
 `close()`, and a savefig at the figure's own dpi that reproduces the rendered array byte for
-byte, which is what makes a loop of frames an animation.
+byte, which is what makes a loop of frames an animation. A colourbar is measured against the
+picture it keys and stands through a repaint, so a panel that redraws every frame keeps the width
+it was given.
 
 ```python
 from matplotlib import pyplot as mpl
