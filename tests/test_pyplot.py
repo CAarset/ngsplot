@@ -247,6 +247,68 @@ def test_the_layer_registers_no_colormap_anywhere():
                          - colormap.palette(colormap.NCOLORS) * 255)) < 1
 
 
+def test_a_colourbar_removed_gives_the_room_it_took_back():
+    """``Colorbar.remove`` restores the axis it carved off of its mappable's ``axes``; a private
+    mappable has to answer for the picture it keys or the room is gone for good."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(8.0, 4.0))
+    panel = figure.add_subplot(figure.add_gridspec(1, 2)[0, 0])
+    figure.canvas.draw()
+    room = panel.get_subplotspec().get_position(figure).width
+    pyplot.colorbar(pyplot.Plot(payload, ax=panel)).remove()
+    figure.canvas.draw()
+    assert panel.get_subplotspec().get_position(figure).width == pytest.approx(room)
+
+
+def test_repainting_a_colourbar_keeps_the_room_it_took_the_first_time():
+    """A time loop repaints one panel; a bar that carves the cell again each frame is done to
+    the picture in eighths, which is what an animation of a run was turning into."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(15.6, 8.6))
+    panel = figure.add_subplot(figure.add_gridspec(2, 3)[0, 0])
+    room = None
+    standing = None
+    for _ in range(6):
+        pyplot.Plot(payload, ax=panel, colorbar=True)
+        figure.canvas.draw()
+        bars = [bar for bar in figure.axes if bar.get_label() == "<colorbar>"]
+        assert len(bars) == 1
+        standing = bars[0] if standing is None else standing
+        assert bars[0] is standing        # the bar that stands is the one that was built
+        width = panel.get_subplotspec().get_position(figure).width
+        room = width if room is None else room
+        assert width == pytest.approx(room)
+    assert len(figure.axes) == 2
+
+
+def test_a_repainted_colourbar_is_the_bar_of_the_picture_it_was_repainted_with():
+    """The bar that stands is repainted rather than replaced, so it has to carry the ramp, the
+    band count and the range of the newest picture beside it, not the ones it was built with."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(8.0, 4.0))
+    panel = figure.add_subplot(figure.add_gridspec(1, 2)[0, 0])
+    bar = pyplot.colorbar(pyplot.Plot(payload, ax=panel, ncolors=5))
+    assert bar.cmap.N == 5
+    pyplot.Plot(payload, ax=panel, colorbar=True, cmap="viridis", vmin=-0.5, vmax=2.0, ncolors=32)
+    assert bar.cmap.N == 32
+    assert (bar.norm.vmin, bar.norm.vmax) == pytest.approx((-0.5, 2.0))
+    assert len(figure.axes) == 2
+
+
+def test_a_picture_that_stops_asking_for_a_colourbar_gives_the_room_back():
+    """A bar stands while the picture next to it wants one, and no longer than that."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(8.0, 4.0))
+    panel = figure.add_subplot(figure.add_gridspec(1, 2)[0, 0])
+    figure.canvas.draw()
+    room = panel.get_subplotspec().get_position(figure).width
+    pyplot.Plot(payload, ax=panel, colorbar=True)
+    pyplot.Plot(payload, ax=panel)
+    figure.canvas.draw()
+    assert panel.get_subplotspec().get_position(figure).width == pytest.approx(room)
+    assert not [bar for bar in figure.axes if bar.get_label() == "<colorbar>"]
+
+
 @pytest.mark.parametrize("name", ["numberspace", "line_scalar", "volume_scalar"])
 def test_a_payload_that_carries_no_hope_of_a_range_still_plots(name):
     """A constant field and a line have no colour range; they plot flat rather than fail."""
