@@ -71,6 +71,9 @@ HEIGHT = 600
 DPI = 100
 #: the widest a colourbar gets, as a share of the width of the picture it keys
 BAR_SHARE = 0.08
+#: the least of its canvas a picture has to be painted across before a bar measures the painting
+#: rather than the canvas it was painted on: a bar the length of a line is a key nobody can read
+BAR_MIN_PAINT = 0.25
 
 # every keyword of the renderer, and of the camera it builds, is a keyword of a plot; the names
 # come from the signatures rather than a list, so a knob added there arrives here by itself
@@ -359,6 +362,32 @@ def _cell(axes, bar=None):
     return cell
 
 
+def _painted(array):
+    """The share of the canvas it was exported on that a picture was painted across, by rows and
+    by columns.
+
+    The renderer fits a mesh into the raster it is asked for, and the fit leaves the page's own
+    colour around the mesh: a square mesh on a three-to-two canvas is painted over two thirds of its
+    rows and under half of its columns.  A bar is a key to the mesh, so it is measured by what was
+    painted rather than by the canvas around it.  Every eighth pixel answers this well enough -- the
+    number sizes a bar, not a pixel -- and a picture painted over barely any of its canvas is a
+    line, whose canvas is the picture as far as a reader is concerned: a bar the length of a line
+    keys nothing, so there the shares are the whole of the canvas.
+    """
+    view = np.asarray(array)
+    if view.ndim != 3 or view.shape[0] < 32 or view.shape[1] < 32:
+        return 1.0, 1.0  # too small a canvas to read a fit out of
+    view = view[::8, ::8, :3]
+    corners = np.stack([view[0, 0], view[0, -1], view[-1, 0], view[-1, -1]])[:, None, None]
+    painted = ((view != corners).any(axis=3)).all(axis=0)  # unlike every corner: painting, not page
+    rows, columns = np.flatnonzero(painted.any(axis=1)), np.flatnonzero(painted.any(axis=0))
+    if rows.size == 0 or columns.size == 0:
+        return 1.0, 1.0  # a canvas with nothing painted on it is all canvas
+    along = (rows[-1] - rows[0] + 1) / view.shape[0]
+    across = (columns[-1] - columns[0] + 1) / view.shape[1]
+    return (along, across) if min(along, across) >= BAR_MIN_PAINT else (1.0, 1.0)
+
+
 def _bar_geometry(image, kwargs, cell):
     """Room for a bar beside a picture, taken out of the room the picture was given.
 
@@ -369,12 +398,16 @@ def _bar_geometry(image, kwargs, cell):
     never gives up more of the axis than matplotlib would have given up on its own.
 
     ``shrink`` is the share of the cell the bar spans, and it is exact -- a bar is that share of
-    the cell long.  ``fraction`` is the share of the axis the picture gives up, which is the room
-    a bar stands in rather than its width: matplotlib makes a bar as wide as its length over
-    ``aspect``, and under a tight or constrained layout out of ``fraction`` instead.  Both are
-    capped, since a bar is measured against the picture either way and the two routes do not
-    agree on what the width came to.  Whatever is named is left named, and a bar with a ``cax``
-    of its own is nobody's cell to size.
+    the cell long.  ``fraction`` is the share of the axis the picture gives up, which is the room a
+    bar stands in rather than its width: matplotlib makes a bar as wide as its length over
+    ``aspect``, and under a tight or constrained layout makes the width out of that room instead.
+    A room too narrow to hold the bar is a room the bar gets shortened into, because matplotlib
+    gives a bar a row of ``shrink`` and an aspect of its own and cuts the bar to the width of its
+    room times that aspect.  So the room is asked for as the bar's own width, which is what the
+    second route makes of it too, and the two agree on one bar measured by its picture.  What that
+    picture is, is the mesh inside the raster rather than the page the raster was fit onto
+    (:func:`_painted`).  Whatever is named is left named, and a bar with a ``cax`` of its own is
+    nobody's cell to size.
     """
     out = dict(kwargs)
     figure = image.axes.get_figure()
@@ -385,6 +418,8 @@ def _bar_geometry(image, kwargs, cell):
     pad = float(out.get("pad", 0.05))
     x0, x1, y0, y1 = image.get_extent()  # the shape imshow letterboxes to, not the array's
     shape = abs(x1 - x0) / abs(y1 - y0) if not horizontal else abs(y1 - y0) / abs(x1 - x0)
+    painted = _painted(image.get_array())
+    long_share, wide_share = painted if not horizontal else painted[::-1]
     along = cell.height * inches[1] if not horizontal else cell.width * inches[0]
     across = cell.width * inches[0] if not horizontal else cell.height * inches[1]
     if not (math.isfinite(shape) and shape > 0 and along > 0 and across > 0 and pad < 0.85):
@@ -392,16 +427,27 @@ def _bar_geometry(image, kwargs, cell):
 
     def picture(fraction):  # what the axis shows of the picture, with that much room given up
         fit = min(along, across * (1 - fraction - pad) / shape)
-        return fit, shape * fit  # along the bar, across it
+        return fit * long_share, shape * fit * wide_share  # along the bar, across it
 
-    fraction = min(0.15, BAR_SHARE * picture(0.15)[1] / across)
-    out.setdefault("fraction", fraction)
-    long_side, wide_side = picture(float(out["fraction"]))
+    fraction = float(out.get("fraction", 0.15))
+    aspect = float(out.get("aspect", 20.0))
+    for _ in range(2):  # the room a bar needs depends on the room it takes; twice settles it
+        long_side, wide_side = picture(fraction)
+        length = float(out.get("shrink", long_side / along)) * along
+        if "aspect" not in out:
+            # a bar is as wide as its length over ``aspect``: ask for the cap, but never for a
+            # fatter bar than the 20 it would have stood on anyway
+            aspect = max(20.0, length / (BAR_SHARE * wide_side))
+        if "fraction" in out:
+            break  # room named is room given, whatever width the bar takes in it
+        # a room too narrow to hold the bar is a room the bar is cut short in, so the room a bar
+        # asks for is the width it would be: length over aspect, capped by the share of a picture
+        fraction = min(length / aspect, BAR_SHARE * wide_side) / across
+
     out.setdefault("shrink", long_side / along)
+    out.setdefault("fraction", fraction)
     if not horizontal and "aspect" not in out:
-        # a bar is as wide as its length over ``aspect``: ask for the cap, but never for a fatter
-        # bar than the 20 it would have stood on anyway
-        out["aspect"] = max(20.0, float(out["shrink"]) * long_side / (BAR_SHARE * wide_side))
+        out["aspect"] = aspect
     return out
 
 

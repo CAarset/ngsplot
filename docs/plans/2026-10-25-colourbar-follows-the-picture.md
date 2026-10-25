@@ -375,6 +375,42 @@ so it cannot compound.
       gridspec, from `fraction` under constrained layout — same result either way), and the two
       test names.
 
+### Follow-up on the ground: the bar keys the mesh, not the raster it was fit into
+
+Re-rendering the demo showed the bar still standing over the mesh it keys.  The letterbox read off
+`AxesImage.get_extent()` is the *raster* the renderer was asked for, and the renderer fits the mesh
+into *that*, painting its page colour into the margin.  In the demo's 11.4×7.4 in 2×2 panel the
+extent box measured 3.65×2.43 in while the mesh inside it measured 1.59×1.59 in, so a bar as long as
+the extent stood 1.54× the mesh.  `pyplot._painted` reads the painted share of a raster out of the
+array by colour — the four corners are page, a row unlike every one of them holds mesh, over every
+eighth pixel — and `_bar_geometry` measures a bar against that.
+
+- [x] `BAR_MIN_PAINT = 0.25`: a picture painted across under a quarter of its canvas is a line, and
+      a bar the length of a line keys nothing, so there the canvas stands for the picture
+      (`dims/line_scalar` paints rows 298..301 of 600 and columns 175..724).
+- [x] The room is asked for as the bar's own width, because `make_axes_gridspec` gives the bar axes
+      `set_box_aspect(aspect)`: a bar is drawn `min(shrink × cell, aspect × carved column)` long, so
+      a room too narrow to hold a bar shortens the bar instead of narrowing it.  `fraction` is
+      therefore `min(length / aspect, BAR_SHARE × painted) / across`, which lets a bar reach its
+      length *and* makes the plain-gridspec and constrained-layout widths agree; two passes settle
+      it, since the room a bar needs depends on the room it takes.
+- [x] Guard tests: `test_a_colourbar_keys_the_mesh_and_not_the_page_fit_around_it`,
+      `test_a_picture_that_is_a_line_is_keyed_by_the_canvas_it_was_painted_across`, and the height
+      assertion of `test_the_room_named_for_a_colourbar_is_the_room_it_gets`, which a first version
+      of this rule broke — a named `shrink=1.0` was overruled by a room too narrow to hold the bar
+      it asked for (1.56 in of bar in a 3.08 in cell).
+
+Measured in one run (`.venv`, matplotlib 3.11.2, `dims/surface_scalar`, 2×3 gridspec at 15.6×8.6 in):
+
+| bar sized by | bar ÷ mesh tall | bar ÷ mesh wide | mesh (in) | canvas (in) | f / s / a |
+|---|---|---|---|---|---|
+| the numbers matplotlib defaults to | 2.45× | 12.24% | 1.23 × 1.23 | 2.84 × 1.90 | 0.150 / 1.000 / 20.0 |
+| the mesh it keys | 0.99× | 4.95% | 1.43 × 1.43 | 3.31 × 2.20 | 0.020 / 0.470 / 20.0 |
+
+Bare axes in the page's own 9×6 in figure went 1.93× → 0.99× tall and 9.64% → 4.95% wide, the canvas
+growing 7.20×4.80 → 8.37×5.58 in as the room fell.  A horizontal bar runs 43.4% of its canvas — the
+painted width, since the bar is long where the mesh is wide — where it ran 112.5% of it before.
+
 ## Task 4 — The record, the demo, the reference
 
 - [ ] `docs/SPEC.md:103-117`: keep the "a colourbar cannot be built on the picture" argument;

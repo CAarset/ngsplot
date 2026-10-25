@@ -23,6 +23,7 @@ import numpy as np  # noqa: E402
 import pytest  # noqa: E402
 from matplotlib import image as mplimage  # noqa: E402
 from matplotlib import pyplot as mpl  # noqa: E402
+from matplotlib.transforms import Bbox  # noqa: E402
 
 from ngsplot import colormap, pyplot, scene  # noqa: E402
 
@@ -309,6 +310,27 @@ def test_a_picture_that_stops_asking_for_a_colourbar_gives_the_room_back():
     assert not [bar for bar in figure.axes if bar.get_label() == "<colorbar>"]
 
 
+def painted_box(image, figure):
+    """The box a picture was actually painted into, in figure coordinates.
+
+    The renderer fits a mesh into the raster it exports, and the fit leaves the page's own colour
+    around it -- a square mesh on a three-to-two raster is painted across two thirds of its rows.
+    A key is measured against the painting a reader sees, so a test that asks how tall a bar is
+    asks about this box rather than about the raster it sits in.
+    """
+    array = np.asarray(image.get_array())[..., :3]
+    corners = np.stack([array[0, 0], array[0, -1], array[-1, 0], array[-1, -1]])[:, None, None]
+    painted = ((array != corners).any(axis=3)).all(axis=0)  # unlike every corner: not page
+    rows, cols = np.flatnonzero(painted.any(axis=1)), np.flatnonzero(painted.any(axis=0))
+    x0, x1, y0, y1 = image.get_extent()
+    left, right = sorted(x0 + (x1 - x0) * cols[[0, -1]] / array.shape[1])
+    bottom, top = sorted(y0 + (y1 - y0) * rows[[0, -1]] / array.shape[0])
+    corners = image.axes.transData.transform([[left, bottom], [right, top]])
+    box = Bbox.from_extents(corners[:, 0].min(), corners[:, 1].min(),
+                            corners[:, 0].max(), corners[:, 1].max())
+    return box.transformed(figure.transFigure.inverted())
+
+
 def test_a_colourbar_is_as_tall_as_the_picture_and_no_wider_than_a_share_of_it():
     """A bar sized by the cell stands over a picture that kept the shape it was painted in.  It
     is a key to that picture, so it is measured against it, cell aside."""
@@ -317,11 +339,40 @@ def test_a_colourbar_is_as_tall_as_the_picture_and_no_wider_than_a_share_of_it()
     panel = figure.add_subplot(figure.add_gridspec(2, 3)[0, 0])
     image = pyplot.Plot(payload, ax=panel, colorbar=True)
     figure.canvas.draw()
-    picture = image.get_window_extent().transformed(figure.transFigure.inverted())
+    picture = painted_box(image, figure)
     bar = [axes for axes in figure.axes if axes.get_label() == "<colorbar>"][0].get_position()
     assert bar.height == pytest.approx(picture.height, rel=0.02)
     assert bar.width <= pyplot.BAR_SHARE * picture.width
     assert bar.width >= picture.width / 40        # thinner than that and it is a line, not a key
+
+
+def test_a_colourbar_keys_the_mesh_and_not_the_page_fit_around_it():
+    """The raster a picture is exported on is a canvas the mesh was fit into, canvas and all.
+    The bar is a key to the mesh, so it stops where the mesh stops."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(15.6, 8.6))
+    panel = figure.add_subplot(figure.add_gridspec(2, 3)[0, 0])
+    image = pyplot.Plot(payload, ax=panel, colorbar=True)
+    figure.canvas.draw()
+    canvas = image.get_window_extent().transformed(figure.transFigure.inverted())
+    picture = painted_box(image, figure)
+    assert picture.height < 0.7 * canvas.height       # a square mesh, on a three-to-two canvas
+    bar = [axes for axes in figure.axes if axes.get_label() == "<colorbar>"][0].get_position()
+    assert bar.height == pytest.approx(picture.height, rel=0.05)
+
+
+def test_a_picture_that_is_a_line_is_keyed_by_the_canvas_it_was_painted_across():
+    """A bar no longer than its picture would be a bar the length of a line, which is a key
+    nobody can read: a sliver of a picture is measured against the room its canvas takes."""
+    payload = gtdata.render_data_of("dims/line_scalar")
+    figure = mpl.figure(figsize=(15.6, 8.6))
+    panel = figure.add_subplot(figure.add_gridspec(2, 3)[0, 0])
+    image = pyplot.Plot(payload, ax=panel, colorbar=True)
+    figure.canvas.draw()
+    canvas = image.get_window_extent().transformed(figure.transFigure.inverted())
+    assert painted_box(image, figure).height < 0.1 * canvas.height      # a line, not a panel
+    bar = [axes for axes in figure.axes if axes.get_label() == "<colorbar>"][0].get_position()
+    assert bar.height == pytest.approx(canvas.height, rel=0.05)
 
 
 def test_the_room_named_for_a_colourbar_is_the_room_it_gets():
