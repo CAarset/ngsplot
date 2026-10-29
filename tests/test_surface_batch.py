@@ -4,9 +4,9 @@ triangle at a time.
 ``paint_surface`` walks ``ne`` elements and ``n_segments ** 2`` sub-triangles each, which on
 a recorded picture is tens of thousands of calls into ``_paint_triangle``, every one of them
 setting up its own bounding box and sweeping its own rows.  The batched painter hands the
-whole sheet to :func:`ngsplot.raster._paint_stack` at once, which bins the triangles into
-screen tiles and sweeps each tile over all of them.  What may not change is the picture, and
-the picture here is decided by three things the batch has to get exactly right:
+whole sheet to :func:`ngsplot.raster._paint_stack` at once, which sweeps every triangle over
+windows of its own box, all the windows of one shape in one array.  What may not change is
+the picture, and the picture here is decided by three things the batch has to get exactly right:
 
 * the draw order.  An instanced ``THREE.Mesh`` draws instance by instance, and within an
   instance in the order ``subtriangles`` returns (:mod:`ngsplot.bezier`), so the stack takes
@@ -184,13 +184,13 @@ def test_the_batched_surface_is_the_surface_of_the_loops(samples, case):
 def test_a_stack_of_few_coarse_triangles_is_swept_one_at_a_time(monkeypatch):
     """Which of the two sweeps runs is a measured choice, and both draw the same picture.
 
-    The batch pays for every tile a box touches, which for a triangle wider than a tile is
-    several times the area of the triangle; the per-primitive sweep pays for a bounding box and
-    a dozen numpy calls per primitive and for nothing else.  The boxes of a mesh that fills the
+    The batch lights a pixel by gathering the corners of the primitive that holds it, row by
+    row; the per-primitive sweep lights the box of a primitive by broadcasting its corners over
+    it, and pays a dozen numpy calls per primitive for that.  The boxes of a mesh that fills the
     frame add up to about one canvas however coarse the mesh is, so the first cost is set by the
     picture and the second by how many primitives it is cut into: a coarse mesh is the case the
-    loop wins -- on the recorded ``mesh_only``, twice -- and the loop is what the painter used to
-    be.  At or above :data:`ngsplot.raster._STACK_LOOP_AREA` pixels of canvas per primitive, the
+    loop wins -- on the recorded ``mesh_only``, by a fifth -- and the loop is what the painter used
+    to be.  At or above :data:`ngsplot.raster._STACK_LOOP_AREA` pixels of canvas per primitive, the
     batch runs.
 
     Both branches then have to give the loop's planes exactly, which is the point of keeping it:
@@ -199,9 +199,9 @@ def test_a_stack_of_few_coarse_triangles_is_swept_one_at_a_time(monkeypatch):
     kw = dict(vmin=-0.4, vmax=0.4)
     cam = camera_for(elev=25.0, azim=15.0)
     sheet = mesh()
-    # the same saddle, the same boxes, one quarter of its elements: what changes is how many
+    # the same saddle, the same boxes, a sixteenth of its elements: what changes is how many
     # primitives there are to pay a call for, which is what the choice is made on
-    stacks = dict(coarse=sheet[:8], fine=sheet)
+    stacks = dict(coarse=sheet[:2], fine=sheet)
 
     # the loops first: reference_surface calls _paint_triangle, which is what gets counted
     wanted = {name: reference_surface(canvas_for(), cam, 1, ctrl, n_segments=2, **kw)
@@ -220,9 +220,9 @@ def test_a_stack_of_few_coarse_triangles_is_swept_one_at_a_time(monkeypatch):
         np.testing.assert_array_equal(got.planes, wanted[name].planes)
         np.testing.assert_array_equal(got.depths, wanted[name].depths)
 
-    # where the choice was measured to turn: at 415 pixels of canvas per primitive the batch is
-    # already ahead, at 600 the loop still is.  A threshold outside that gap is a guess.
-    assert 415 < raster._STACK_LOOP_AREA < 600
+    # where the choice was measured to turn: at 4500 pixels of canvas per primitive the batch is
+    # already ahead, at 5625 the loop still is.  A threshold outside that gap is a guess.
+    assert 4500 < raster._STACK_LOOP_AREA < 5625
 
 
 def test_the_sheet_shows_both_of_its_faces():
@@ -262,7 +262,7 @@ def test_what_is_behind_the_camera_and_what_is_no_value_reaches_no_canvas():
     NaN at every corner.  An equality against nothing is worth nothing, so both, made live,
     have to change the sheet -- and the behind-the-eye row has to be behind it for the right
     reason, which is that its corners fold back to the *inside* of the window: a triangle that
-    merely lands off the edge would be thrown away by the tile binning alone, and the filter
+    merely lands off the edge would be thrown away by the window binning alone, and the filter
     would never be asked.
     """
     ctrl = mesh()

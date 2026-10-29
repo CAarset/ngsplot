@@ -68,7 +68,9 @@ def lookup(values, vmin, vmax, pal=None):
     """RGB (float64, 0..1) of ``values`` for palette ``pal`` (default ``palette()``)."""
     if pal is None:
         pal = palette()
-    return pal[band_index(values, vmin, vmax, len(pal))].astype(np.float64)
+    pal = np.asarray(pal)
+    return pal.take(band_index(values, vmin, vmax, len(pal)), axis=0).astype(np.float64,
+                                                                              copy=False)
 
 
 def to_matplotlib(pal=None, name="ngsolve"):

@@ -18,7 +18,7 @@ import numpy as np
 
 from . import camera, colormap, geometry, raster
 
-__all__ = ["DEFAULTS", "settings_of", "view_range", "colormap_of", "paint"]
+__all__ = ["DEFAULTS", "settings_of", "view_range", "colormap_of", "frame", "paint"]
 
 #: ``three/gui.ts`` settings of a fresh panel: the values a first ``Draw`` renders with.
 DEFAULTS = {
@@ -225,7 +225,62 @@ def colormap_of(cmap=None, ncolors=colormap.NCOLORS, mesh_only=False):
     return np.asarray(cmap(centres), dtype=np.float64)[..., :3]
 
 
-def paint(render_data, *, width, height, view=None, canvas=None,
+def _placing(render_data, settings, n_segments, deformation, function_mode, complex_scale):
+    """What decides where a picture lies, as :func:`paint` resolves it from its keywords and the
+    payload: ``(order, n, lift, flat, mode, function_mode, complex_scale)`` -- the order of the
+    geometry, its subdivision, how far the surface and the lines are lifted, which deformation
+    the shaders compile, and the part of a value that lifts it."""
+    order = geometry.order_of(render_data)
+    function_mode = settings["function_mode"] if function_mode is None else float(function_mode)
+    if complex_scale is None:
+        complex_scale = settings["complex_scale"]
+    n = settings["subdivision"] if n_segments is None else int(n_segments)
+    lift = settings["deformation"] if deformation is None else float(deformation)
+    mode = raster.deformation_mode(int(render_data["mesh_dim"]), int(render_data["funcdim"]),
+                                  settings["is_complex"]) if lift else "none"
+    flat = float(lift) if render_data.get("deformation") is True else 0.0
+    return order, n, lift, flat, mode, function_mode, complex_scale
+
+
+def _frame(render_data, width, height, fit, camera_kwargs, placing):
+    """The camera of :func:`frame`, from the keywords already resolved by :func:`_placing`."""
+    if fit not in (None, "sphere", "box"):
+        raise ValueError(f"fit frames the bounding 'sphere' of the mesh, as the page does, or "
+                         f"the 'box' of what is painted, not {fit!r}")
+    if (width is None or height is None) and (fit != "box" or width is None and height is None):
+        raise TypeError("a side of the canvas is left to the picture only with fit='box', "
+                        "which sizes it from the other")
+    view = camera.Camera.from_render_data(render_data, width=width or height,
+                                         height=height or width, **camera_kwargs)
+    if fit == "box":
+        order, n, lift, flat, mode, function_mode, complex_scale = placing
+        view = _box_view(view, _extent(render_data, order, n, lift, flat, mode, function_mode,
+                                       complex_scale),
+                         width is None, height is None)
+    return view
+
+
+def frame(render_data, *, width, height, fit=None, n_segments=None, deformation=None,
+          function_mode=None, complex_scale=None, is_complex=None, **camera_kwargs):
+    """The camera :func:`paint` would paint ``render_data`` with, and so its canvas, unpainted.
+
+    The keywords are those of :func:`paint` that say where the picture lies -- the canvas, the
+    framing, the turns, and what moves the geometry: the subdivision, the deformation, and the
+    part of a value that lifts it -- and the answer is the :class:`ngsplot.camera.Camera`, whose
+    ``width`` and ``height`` are the canvas.  It is what to ask when a side is left to
+    ``fit="box"``: the size of a picture of a long domain, known before it is painted, so that a
+    figure can be laid out around it.  Handed back as ``view=`` to :func:`paint` or
+    :func:`ngsplot.pyplot.Plot`, it paints without framing again -- which a time loop over one
+    mesh then does once and not every frame, as long as no deformation moves the mesh between
+    the frames.
+    """
+    settings = settings_of(render_data, is_complex=is_complex)
+    placing = _placing(render_data, settings, n_segments, deformation, function_mode,
+                       complex_scale)
+    return _frame(render_data, width, height, fit, camera_kwargs, placing)
+
+
+def paint(render_data, *, width=None, height=None, view=None, canvas=None, fit=None,
           vmin=None, vmax=None, autoscale=None, cmap=None, ncolors=None,
           n_segments=None, line_width=None, surface=None, wireframe=None, edges=None,
           function_mode=None, complex_scale=None, dark_backside=None,
@@ -234,10 +289,20 @@ def paint(render_data, *, width, height, view=None, canvas=None,
 
     ``width`` and ``height`` are the drawing buffer, which is the size of the page's
     canvas rather than of the element holding it (docs/OVERLAYS.md, "The overlay
-    layer").  Pass ``view`` to draw with a camera built elsewhere, and any other
+    layer").  Pass ``view`` to draw with a camera built elsewhere -- by :func:`frame`, say --
+    which brings its canvas with it, and any other
     :class:`ngsplot.camera.Camera` keyword -- ``elev``, ``azim``, ``roll``, the page's
     own ``euler_angles`` or ``transformations`` -- to turn the default one; a payload
     that records a camera in ``gui_settings`` is followed without being asked.
+
+    ``fit`` is what the camera frames.  ``"sphere"``, or nothing, is the page's own framing:
+    the bounding sphere of the mesh fills :data:`ngsplot.camera.FILL` of the canvas height,
+    whatever the angle, which leaves a mesh much longer than it is wide a strip across the
+    middle.  ``"box"`` frames the box of what is painted instead, as seen from the angle asked
+    for, with the same margin on its tighter side and its middle in the middle of the canvas
+    (:meth:`ngsplot.camera.Camera.fit`).  With ``"box"`` one of ``width`` and ``height`` may
+    be ``None``, and is then sized to the box, with the margin of the other side;
+    :func:`frame` says which size that is without painting.
 
     Left alone, every keyword is the setting of a fresh panel (see
     :func:`settings_of`): the colours come from ``colormap_of()``, the range from
@@ -259,25 +324,24 @@ def paint(render_data, *, width, height, view=None, canvas=None,
         raise NotImplementedError(
             "the arrow glyphs of Vectors.show are not painted yet; "
             "draw them with matplotlib's quiver if a payload asks for them")
-    if view is None:
-        view = camera.Camera.from_render_data(render_data, width=width, height=height,
-                                             **camera_kwargs)
-    elif camera_kwargs:
-        raise TypeError("camera keywords with an explicit view contradict it")
-    if canvas is None:
-        canvas = raster.Canvas(width, height)
-
-    order = geometry.order_of(render_data)
-    function_mode = settings["function_mode"] if function_mode is None else float(function_mode)
+    placing = _placing(render_data, settings, n_segments, deformation, function_mode,
+                       complex_scale)
+    order, n, lift, flat, mode, function_mode, complex_scale = placing
     n_colors = settings["ncolors"] if ncolors is None else int(ncolors)
     pal = colormap_of(cmap, n_colors, settings["mesh_only"])
     low, high = view_range(render_data, vmin, vmax, autoscale, function_mode)
-    n = settings["subdivision"] if n_segments is None else int(n_segments)
-    lift = settings["deformation"] if deformation is None else float(deformation)
-    mode = raster.deformation_mode(int(render_data["mesh_dim"]), int(render_data["funcdim"]),
-                                  settings["is_complex"]) if lift else "none"
 
-    flat = float(lift) if render_data.get("deformation") is True else 0.0
+    if view is None:
+        view = _frame(render_data, width, height, fit, camera_kwargs, placing)
+    elif camera_kwargs:
+        raise TypeError("camera keywords with an explicit view contradict it")
+    elif fit == "box":
+        raise TypeError("an explicit view is framed already; fit frames the one paint makes")
+    elif (width, height) not in ((None, None), (view.width, view.height)):
+        raise TypeError(f"the view brings a canvas of {view.width} x {view.height}; leave the "
+                        f"width and height out, or name that one")
+    if canvas is None:
+        canvas = raster.Canvas(view.width, view.height)
     if surface is None:
         surface = settings["surface"]
     if surface:
@@ -288,7 +352,7 @@ def paint(render_data, *, width, height, view=None, canvas=None,
             vectors=vectors,
             deformation=lift, mode=mode,
             function_mode=function_mode,
-            complex_scale=settings["complex_scale"] if complex_scale is None else complex_scale,
+            complex_scale=complex_scale,
             dark_backside=settings["dark_backside"] if dark_backside is None else bool(dark_backside),
             # a plain Draw reaches the page with draw_surf null, and only an explicit false
             # is NO_FUNCTION_VALUES
@@ -301,9 +365,62 @@ def paint(render_data, *, width, height, view=None, canvas=None,
     width_px = settings["line_width"] if line_width is None else float(line_width)
     if edges and render_data.get("edges"):
         raster.paint_edges(canvas, view, order, geometry.edge_points(render_data)[0],
-                           n_segments=n, line_thickness=width_px / height,
+                           n_segments=n, line_thickness=width_px / canvas.height,
                            deformation=flat, mode=mode)
     if wireframe and render_data.get("Bezier_points"):
         raster.paint_wireframe(canvas, view, order, geometry.wireframe_points(render_data)[0],
                                n_segments=n, deformation=flat, mode=mode)
     return canvas
+
+
+def _extent(render_data, order, n, lift, flat, mode, function_mode, complex_scale):
+    """Every point the passes of :func:`paint` put on the canvas, as ``(k, 3)`` mesh points.
+
+    The lattice of the surface and the samples of the two line objects, each deformed the way
+    its own pass deforms it, so that a box fit around them is fit around the picture and not
+    around the mesh it was painted from.
+    """
+    kw = dict(mode=mode, function_mode=function_mode, complex_scale=complex_scale)
+    pieces = []
+    ctrl, vectors = geometry.trig_points(render_data)
+    if len(ctrl):
+        pos, _ = raster.lattice_points(order, ctrl, vectors=vectors, deformation=lift,
+                                       n_segments=n, **kw)
+        pieces.append(pos.reshape(-1, 3))
+    for key, points in (("edges", geometry.edge_points),
+                        ("Bezier_points", geometry.wireframe_points)):
+        if render_data.get(key):
+            pos, _ = raster.spline_samples(order, points(render_data)[0], n,
+                                           deformation=flat, **kw)
+            pieces.append(pos.reshape(-1, 3))
+    return np.concatenate(pieces) if pieces else np.zeros((0, 3))
+
+
+#: the most a side of the canvas sized to a box is made, as a multiple of the side it was
+#: sized from: a box this long for its width is a line, and a canvas around it is mostly margin
+_BOX_SIDE = 8
+
+
+def _box_view(view, points, size_width, size_height):
+    """``view`` framed on the box of ``points``, on a canvas whose side ``size_width`` or
+    ``size_height`` says is to be sized to that box first.
+
+    A side sized to the box is the box at :data:`ngsplot.camera.FILL` of the other side, plus
+    the margin that leaves on the other side, so the picture has one margin all round.  Which
+    way the box runs does not depend on the canvas it is measured on, since a pixel is the same
+    length of mesh across as down.
+    """
+    if size_width or size_height:
+        seen = view.box(points)
+        across, down = (1.0, 1.0) if seen is None else (seen[0][1] - seen[0][0],
+                                                        seen[0][3] - seen[0][2])
+        margin = 1.0 - camera.FILL
+        if size_height:
+            ratio = down / across if across > 0 else float(_BOX_SIDE)
+            side = view.width * (camera.FILL * min(ratio, _BOX_SIDE) + margin)
+            view = view.reframed(height=int(min(max(round(side), 1), _BOX_SIDE * view.width)))
+        else:
+            ratio = across / down if down > 0 else float(_BOX_SIDE)
+            side = view.height * (camera.FILL * min(ratio, _BOX_SIDE) + margin)
+            view = view.reframed(width=int(min(max(round(side), 1), _BOX_SIDE * view.height)))
+    return view.fit(points)

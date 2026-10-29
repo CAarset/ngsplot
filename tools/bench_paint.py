@@ -20,8 +20,8 @@ two timings taken in two runs say nothing about which setting is faster.  For a 
 name the settings to compare and the tool paints every case with each of them in turn, in the
 same process, over several rounds, keeping the fastest of each:
 
-    .venv/bin/python tools/bench_paint.py --tune before=_STACK_TILE_MAX=512 \\
-        --tune after=_STACK_TILE_MAX=64 [case ...]
+    .venv/bin/python tools/bench_paint.py --tune before=_STACK_WINDOW=32 \\
+        --tune after=_STACK_WINDOW=64 [case ...]
 
 then prints one column of milliseconds per setting and the ratio between the first and the
 last.  The names are attributes of :mod:`ngsplot.raster`, which are read from the module when
@@ -143,7 +143,7 @@ def parse_tune(text):
         key, sep, value = item.partition("=")
         if not sep or not hasattr(raster, key.strip()):
             raise SystemExit(f"{item!r} is not a name of a setting of ngsplot.raster "
-                             f"with a value, as in _STACK_TILE_MAX=64")
+                             f"with a value, as in _STACK_WINDOW=64")
         settings[key.strip()] = int(value)
     if not settings:
         raise SystemExit(f"--tune {text!r} names no setting, so it would measure the same "

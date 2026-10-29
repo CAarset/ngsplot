@@ -47,34 +47,46 @@ interactive-tool heritage (Netgen's GUI) rather than from C.
 
 ## Taking the payload without taking the window
 
-`ngsplot._ngsolve.render_data(obj, *args, **kwargs)` is the only place in the package that
-imports ngsolve. It calls `Draw` and reads back what `Draw` would have sent:
+`ngsplot.render_data(obj, *args, **kwargs)` (living in `ngsplot._ngsolve`) is the only place in
+the package that imports ngsolve. It builds what `Draw` would have sent, the way `Draw` builds it,
+and stops before the widget:
 
 ```python
-scene = Draw(obj, *args, show=False, **kwargs)   # netgen/webgui.py:674
-return scene.widget.value                        # the dict WebGLScene handed the widget
+options = _get_draw_default_args()               # what Draw fills in, netgen/webgui.py:654
+options.update(kwargs)
+scene = WebGLScene.__new__(WebGLScene)           # the scene, without the constructor
+scene.obj, scene.args, scene.kwargs = obj, args, options
+scene.encoding, scene.widget = "b64", None
+return scene.GetData()
 ```
 
-`Draw` applies `_get_draw_default_args()` and builds a `WebGLScene`, whose constructor is where
-the work is: `GetData` (`netgen/webgui.py:480`) picks an `encoding`, dispatches on
-`type(obj)` to the draw type registered for it, and finishes the dict with the range, the flags
-and the camera. The widget is a plain `anywidget` object and nothing is displayed with
-`show=False`, so the payload exists before any browser does. `ngsolve.webgui` has to be
-imported for the dispatch to know `Mesh`, `CoefficientFunction` and `GridFunction`, which the
-seam does for its caller.
+`GetData` (`netgen/webgui.py:480`) is where the work is: it dispatches on `type(obj)` to the draw
+type registered for it, and finishes the dict with the range, the flags and the camera. It reads
+nothing off the scene but those four attributes. The constructor is what is skipped, because it
+builds a `WebGuiWidget` before anything looks at `show` (`netgen/webgui.py:438`), and with
+`anywidget` installed that widget is an `ipywidgets` widget: in a kernel it opens a comm, ships
+the payload to the front end — about 100 KB for a few hundred P3 elements — and files itself in
+the registry the notebook's widget state is saved from. Closing it after the fact stops the
+registry from growing but not the traffic. Measured in a kernel under nbclient, twenty plots of a
+287-element P3 field through `Draw` left 20 widgets and 20 comms open and 2.26 MB of widget state
+in the saved notebook; through the scene without its widget, none, and a 3 KB notebook. And with
+no comm there is nothing that belongs to the kernel's main thread, so a payload can be built from
+any thread. A `netgen` old enough not to have `_get_draw_default_args` goes through `Draw` with
+`show=False` instead, and the widget is closed once its value is read. `ngsolve.webgui` has to be
+imported for the dispatch to know `Mesh`, `CoefficientFunction` and `GridFunction`, which the seam
+does for its caller.
 
 Two of `Draw`'s habits are kept rather than repaired, because the seam's promise is that a
 payload from ngsplot is the payload from `Draw`: a `CoefficientFunction` needs its mesh
 positionally and raises `Cannot draw CoefficientFunction without mesh`
 (`ngsolve/webgui.py:119`) without one, and the dead `eval_` branch above stays dead.
-`show` and `filename` are the two keywords the seam does not pass on; they belong to the window
-it never opens. `widget.value` is read instead of calling `GetData()` again so that the arrays
-are fitted once and not twice — `GenerateHTML` builds them a second time.
+`show` and `filename` are the two keywords the seam refuses; they belong to the window it never
+opens.
 
 ## Laying the picture on matplotlib
 
 `ngsplot.pyplot` decides nothing about how a function looks.  It hands what `Plot` was given to
-`_ngsolve.render_data`, hands the payload to `scene.paint`, and lays the resulting array on an
+`ngsplot.render_data`, hands the payload to `scene.paint`, and lays the resulting array on an
 `Axes.imshow`; every word after that is matplotlib's.  Three numbers fix the frame: `WIDTH = 900`
 and `HEIGHT = 600`, the size the page's canvas is given, and `DPI = 100`, so the figure is 9 by 6
 inches and a `savefig` at the figure's own dpi writes the renderer's array byte for byte — the
@@ -116,27 +128,54 @@ and leaves the rest of that room empty, and because the renderer fits a mesh int
 asked for and leaves the page's own colour around it: a bar is as long as the mesh is painted across
 the axis, and no wider than `pyplot.BAR_SHARE` (8%) of it, both as caps, so a picture that filled
 its cell gets a bar as long as its cell while one that letterboxed gets a bar as long as itself.
+The width cap gives way where it would make the bar longer than `pyplot.BAR_MAX_ASPECT` (30)
+times its width, which is a line with labels on it.
 The painting is read out of the array by colour — the four corners of a raster are page, and a row
 unlike every one of them holds mesh — over every eighth pixel, and a picture painted across under
-`pyplot.BAR_MIN_PAINT` (25%) of its canvas is a line: a bar the length of a line keys nothing, so
-there the canvas stands for the picture.  `shrink` fixes the length exactly, and the room is asked
+`pyplot.BAR_MIN_PAINT` (5%) of its canvas is a line: a bar the length of a line keys nothing, so
+there the canvas stands for the picture.  A function on a 1D mesh is painted across 0.7% of its
+rows and a 6 x 1.2 pipe across 21%, so the line is told from the pipe well short of either.
+A picture painted more than `pyplot.BAR_TURN` (2) times as wide as it is tall gets its bar
+underneath rather than beside it: beside it, the bar is as long as the picture is tall, which on
+the pipe is 75 pixels for nine labels.  The gap between picture and bar is matplotlib's for the
+side, except under an axis with its frame off, where every side gets the right-hand side's 5%:
+the 15% matplotlib leaves under an axis and the 10% to its left are the room it keeps for tick
+labels, and a picture has none.  `shrink` fixes the length exactly, and the room is asked
 for as the width the bar will be, since a plain gridspec draws a bar as wide as its length over
 `aspect` while a tight or constrained layout makes the width out of `fraction` instead, and since
 matplotlib cuts a bar to the width of its room times `aspect`: a room narrower than the bar shortens
-it, and a room of the bar's own width is the one width both routes agree on.  Whatever room a caller
-names is the room the bar gets, and a bar with a `cax` of its own is sized by whoever made that.
+it, and a room of the bar's own width is the one width both routes agree on.  `aspect` is length
+over width in either orientation (`make_axes_gridspec` inverts it into the box aspect of a
+horizontal bar), so the same rule holds under a picture as beside it; a bar sized for one aspect
+and drawn at matplotlib's 20 is the horizontal bar that came out at half its length.  Whatever a
+caller names is the bar it gets, and a bar with a `cax` of its own is sized by whoever made that.
+Every band edge is ticked, and the labels are thinned at draw time to what the bar has room for —
+every `k`-th edge for the smallest `k` dividing the band count whose labels fit — so both ends are
+always labelled and the labels stay evenly spaced in bands; the edges left unlabelled stay as
+minor ticks.  A label along a vertical bar is given two font sizes, matplotlib's own spacing for a
+y axis, and one across a horizontal bar its own width at three fifths of a font size a character,
+plus a font size between two.
 `Axes` has no `colorbar` attribute, so the function hands the `Colorbar` back.
 
 Plotting twice into one axis replaces the picture, and its bar with it rather than laying a second
 bar beside it, so a time loop is one line, does not stack images on the axis, and does not narrow
-the panels of a live view a frame at a time.  The bar that stands there is told that what it keys
+the panels of a live view a frame at a time.  A bar on a `cax` the caller made is the caller's: a
+repaint that asks for no bar leaves it standing, and it keys the new picture — where it used to be
+retired with the picture, taking the caller's axis out of the figure, so that a live view had to
+make a new one every frame.  Which `cax` a bar stands on is told by which axis it is, not by how it
+prints, since two axes print the same.  The bar that stands there is told that what it keys
 has changed — `Colorbar.update_normal`, matplotlib's own way — which follows a new texture, a
 new range and a different number of bands without touching the layout; a bar asked for in other
 words than the one standing there was asked for is built again.  A bar gives its room back to the
 axis it reads off its mappable, and a private mappable has no axis of its own, so the layer gives
 it the one the picture sits in; without that the room is gone for good, since a removed bar leaves
 the narrowed cell where it put it, and a picture that stops asking for a bar keeps a quarter of
-its width taken by a bar that is no longer there.
+its width taken by a bar that is no longer there.  An axis placed by hand (`add_axes`, no grid)
+has nothing for matplotlib to give back: `make_axes` carves it by `_set_position`, which
+overwrites its original position too, so the bar records the position and the anchor it found and
+puts them back when it goes, and the next bar is measured against that room.  Without it a bar
+on such an axis was measured against what the last one left, came out narrower, was built again
+each repaint, and the picture lost a bar's width a frame (0.92, 0.85, 0.78 of a 4 x 1.2 figure).
 
 ## Geometry: exact, not sampled
 
@@ -404,6 +443,34 @@ Verified: the 900x600 ground truth puts the unit square at x 255..639, y 105..48
 matching `1/(3*tan(20°))` exactly: the mesh has radius 1 at distance 3, so it fills ~92% of
 the vertical field.
 
+That share is `camera.FILL`, and it is what `scene.paint(fit="box")` (and `Plot(fit="box")`) gives
+the *box* of a picture instead of its sphere. The page frames the bounding sphere, which is the
+same picture from every angle and a strip across the middle of the canvas for a long mesh: the
+6 x 1.2 pipe fills 326 x 68 px of a 480 x 360 canvas. A box is framed with the same two numbers
+the page frames with — the centre the turns are made about, and the radius — so every turn and
+the camera are left alone: the centre moves across the screen until the box of the painted points
+(the surface lattice and the line samples, deformed as their passes deform them) sits in the
+middle, and the radius scales until the box fills `FILL` of the canvas on its tighter side, 442 x
+92 px for the pipe. Seen face on a flat mesh scales with one over the radius and is framed in one
+step. A mesh with depth grows faster than that as it comes nearer, and a long one at a slant would
+bring its near end up to the camera, so the radius is never made so small that a point comes
+nearer than the front of the unit sphere, where the sphere framing keeps everything, and is
+bisected where one step does not land. With `fit="box"` one of `width` and `height` may be `None`:
+it is sized to the box at `FILL` of the other side plus the margin that leaves, so the canvas has
+the picture's own shape and one margin all round — `width=400` gives the pipe a 400 x 107 canvas.
+The search projects its points a few dozen times, and the box is set by the few at its four sides,
+so it searches with those and projects all of them once more at the view it found; a point that
+has come out further joins them and the search runs again (`Camera.fit`). On the 1532-element P3
+pipe that is 15 ms against 36, and the result the same box to within the bisection's tolerance.
+
+`scene.frame` (also `ngsplot.frame`) is that camera without the picture: the keywords of `paint`
+that place it — the canvas, `fit`, the turns, the subdivision and the deformation — and the
+`Camera` back, whose `width` and `height` are the canvas. It is how a figure is laid out for a
+box-fitted picture before anything is painted, and `paint(view=...)` or `Plot(view=...)` paints
+with it without framing again, so a time loop over one mesh frames once. A view brings its canvas:
+`paint` refuses a `width` and `height` that are not the view's, and `Plot` takes its defaults of
+900 x 600 to mean the view's.
+
 Background: **white** — `setClearColor(0xffffff, 1)`, and `getBackgroundColor()` returns
 white for a light theme (dark theme, i.e. light text, gives `0.1` grey). Antialiasing is
 MSAA (`antialias: true`), `devicePixelRatio` respected.
@@ -414,7 +481,7 @@ answers.
 
 ## Raster: painting it without a GPU
 
-`src/ngsplot/raster.py` reproduces what those two programs do, in numpy, one element at a
+`src/ngsplot/raster.py` reproduces what those two programs do, in numpy, defined one element at a
 time. `tests/test_parity.py` puts the result against all eight recorded pictures that draw
 a surface: inside the surface and away from the lines that are not painted yet, the median
 difference is zero grey levels out of 255 and the mean is 0.03 to 0.35. What is left is a
@@ -433,7 +500,8 @@ Per element, in the order the GPU uses:
   centres, carrying `1/w`: `p_`, `value_` and `normal_` are interpolated with perspective
   correction, as GL does, not linearly in screen space.
 * **Sub-triangles.** `n_segments^2` of them, each a half-space test on its three edges at
-  the centre of every pixel of its bounding box. A NaN in any control point poisons every
+  every sample position between its corners (`raster._box`, which is the box a GPU walks
+  too, give or take a millionth of a pixel for rounding). A NaN in any control point poisons every
   lattice vertex of the element, which is the shader's per-vertex `isNan` guard culling
   all of them at once.
 * **Fragments run once per pixel**, at the `gl_FragCoord` centre, not once per sample.
@@ -466,6 +534,45 @@ Per element, in the order the GPU uses:
   the page keeps a scrollbar gutter -- and the buffer starts at the top left of the
   picture. Shifting the comparison by one pixel costs an order of magnitude, which is what
   makes that offset a measurement and not an assumption.
+
+Element by element is the definition, and `_paint_triangle` keeps it; the painter runs it as a
+batch. `_paint_stack` takes every sub-triangle of a pass at once and sweeps each over windows of
+its own box, its sides rounded up to 1, 2, 3, 4, 6, 8, 12, ... px and cut at 64, every window of one
+shape in one array — the arithmetic of the per-triangle sweep term for term, so the depths are the
+same bits. The box is the pixels with a sample position between the triangle's corners, not the
+whole pixels its corners touch: for a sub-triangle a pixel across, the size of most of a fine
+mesh, the second is four times the samples. A box swept as several windows has the windows wholly
+outside one edge of its triangle dropped first, by the barycentrics at their four corners, which
+is most of the box of a long thin ribbon. Coverage is asked of every sample of a window; the depth,
+the depth buffer and everything after are asked only of the samples covered, a fifth of them or fewer
+on a fine mesh. The candidates are settled
+against the depth buffer in batches, and the stack keeps, for each sample, which of its
+primitives holds it: a candidate at the depth of the sample it wants takes it exactly when the
+sequential painter would have let it (later in the stack under `LessEqual`, earlier under
+`Less`), so neither the order of the windows nor the batch a candidate came in decides a pixel.
+Most samples have one candidate in a batch and go straight to the depth test; the samples two
+primitives want are settled by two scatters, the least depth each is wanted at
+(`np.minimum.at`) and then the latest or earliest place in the stack at that depth — seven times
+quicker than the sort they replace, on the wireframe where most samples are wanted twice. The
+colour comes last: each pixel is lit once per primitive left holding a sample of it, at the pixel
+centre, which is the per-pixel fragment above. The surface is an indexed stack, as an indexed draw
+is: a sub-triangle carries the three lattice vertices it is made of, and its varyings are fetched
+from the lattice only once it has won a pixel. Held against the per-triangle sweep plane for plane,
+and against the previous batch on every recorded payload, the 287- and 1532-element pipes, a
+grazing view, a cube from three angles and a curved sphere at two or three canvas sizes, it is the
+same bits; against the painter before it, it is 2.1 to 3.5 times faster in CPU time (the 1532-element
+P3 pipe on its 400 x 107 box-fitted canvas: 484 ms to 162, of which the surface 271 to 103 and the
+wireframe 243 to 69). A coarse mesh of a few large triangles (`_STACK_LOOP_AREA`, 5000 canvas
+pixels per primitive) is still painted a triangle at a time, which broadcasts a triangle's corners
+over its box and wins there.
+
+Numpy charges per row for a reduction along an axis of three, twenty to thirty times what the
+same sum costs written out, so the hot paths write it out: the corners of a box, a usable
+sub-triangle, the length of a normal in `lighting.normalize`. A sum is written out in the order
+numpy adds it — `np.sum` starts from its identity, +0.0, which is what gives a sum of zeros its
+sign — and every such rewrite was fuzzed against the code it replaces, bit for bit, through
+signed zeros, NaNs, infinities and overflow. `einsum`'s dot product does not add in either
+plain order and is left alone.
 
 Left for later, roughly in order of need: the lines (`Wireframe` and `Edges`, whose
 `THICK_LINES` expansion is spelled out under Overlays), the overlays, `function_mode == 8`

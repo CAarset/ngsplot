@@ -12,9 +12,9 @@ where the page reads them, because they are how a script says ``vmin``, ``vmax``
 ``min``/``max`` become ``funcmin``/``funcmax``, ``autoscale=False`` becomes the flag that stops
 the renderer from re-reading the function, and the flat names inside ``settings`` are the very
 ones ``scene.settings_of`` folds into the panel.  And a bare ``CoefficientFunction`` still
-hears what ngsolve says about it: without a mesh there is nothing to draw.  And since the
-payload is built by a widget that this package has no use for once the payload is in hand, the
-file answers for that widget as well: built, read, closed.
+hears what ngsolve says about it: without a mesh there is nothing to draw.  And since ``Draw``
+builds a widget this package has no use for, the file answers for that widget as well: it is
+never built.
 """
 
 import base64
@@ -218,36 +218,65 @@ def test_a_coefficient_function_without_a_mesh_says_what_ngsolve_says():
         _ngsolve.render_data(ngs.x * ngs.y)
 
 
-def test_the_widget_the_scene_built_is_closed_once_the_payload_is_read(monkeypatch):
-    """A payload costs a widget to build, and should not cost one to keep.
+def test_a_payload_is_built_without_a_widget(monkeypatch):
+    """A payload costs no widget to build.
 
-    ``Draw`` reads ``show`` only after ``WebGLScene`` has constructed its widget, so the scene
-    arrives holding a widget whoever that widget is -- an ``anywidget`` in a kernel, the plain
-    stand-in where ``netgen`` could not import one -- and closing it is left to the caller.  The
-    seam is that caller.  A subclass that counts closes is what makes the call visible whichever
-    of the two the installed ``netgen`` builds, and the order is worth as much as the count: the
-    payload has to be in hand before the widget goes, and has to be the one the widget was
-    handed rather than a second assembly of it.
+    ``Draw`` builds a widget before it reads ``show``, and with ``anywidget`` installed that
+    widget is a kernel object: it opens a comm, ships the payload to the front end and is filed
+    in the registry a notebook saves its widget state from -- 44 MB of it after one short live
+    run.  Closing the widget once the payload is read stopped the registry from growing but
+    not the payload from being sent, so the seam builds the scene without one.  A widget class
+    that counts its constructions is what makes that visible whichever of the two widgets the
+    installed ``netgen`` would have built, an ``anywidget`` or the plain stand-in.
     """
     import netgen.webgui as netgen_webgui
 
-    seen = []
+    built = []
 
     class Recording(netgen_webgui.WebGuiWidget):
-        def close(self):
-            seen.append(self.value)  # what the widget still held at the moment it was closed
-            inherited = getattr(super(), "close", None)
-            if inherited is not None:  # the stand-in of a netgen without anywidget has none
-                inherited()
+        def __init__(self, *args, **kwargs):
+            built.append(self)
+            super().__init__(*args, **kwargs)
 
     monkeypatch.setattr(netgen_webgui, "WebGuiWidget", Recording)
     mesh, gfu = scalar_2d()
-    first, second = _ngsolve.render_data(gfu), _ngsolve.render_data(gfu)
+    payload = _ngsolve.render_data(gfu, min=0.0, max=2.0)
+    assert not built, "a widget was built to make a payload"
+    # and it is the payload Draw hands its widget, keywords and defaults landed where they go
+    drawn = netgen_webgui.Draw(gfu, show=False, min=0.0, max=2.0).widget.value
+    assert len(built) == 1, "Draw itself still builds one, which is what was counted"
+    assert as_json(payload) == as_json(drawn)
 
-    assert len(seen) == 2, "one widget closed per payload, no more and none left open"
-    assert seen[0] is first and seen[1] is second, (
-        "the payload was read out of the widget before it went, and is the very dict the widget "
-        "was handed rather than the arrays assembled a second time")
+
+def test_what_draw_would_do_with_a_page_is_refused_rather_than_ignored():
+    """``show`` and ``filename`` are the two keywords of ``Draw`` about a page, and there is
+    none here: a script that passes them is told so instead of getting no file."""
+    mesh, gfu = scalar_2d()
+    for name in ("show", "filename"):
+        with pytest.raises(TypeError, match=name):
+            _ngsolve.render_data(gfu, **{name: "x.html"})
+
+
+def test_a_payload_can_be_built_off_the_main_thread():
+    """With no widget there is no comm, and nothing that belongs to the kernel's main thread:
+    a payload built by a worker is the payload the main thread builds."""
+    import threading
+
+    mesh, gfu = scalar_2d()
+    out = {}
+    worker = threading.Thread(target=lambda: out.setdefault("payload", _ngsolve.render_data(gfu)))
+    worker.start()
+    worker.join()
+    assert as_json(out["payload"]) == as_json(_ngsolve.render_data(gfu))
+
+
+def test_the_payload_builder_is_the_package_s_own_name():
+    """The README tells a script to build payloads where the field lives and plot them later,
+    so the builder is ``ngsplot.render_data`` and not a name out of a private module."""
+    import ngsplot
+
+    assert ngsplot.render_data is _ngsolve.render_data
+    assert "render_data" in ngsplot.__all__
 
 
 def test_a_run_of_plots_leaves_no_widget_registered():

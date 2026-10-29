@@ -55,6 +55,7 @@ import weakref
 import numpy as np
 from matplotlib import colors as mcolors
 from matplotlib import pyplot as _pyplot
+from matplotlib import ticker
 from matplotlib.cm import ScalarMappable
 from matplotlib.transforms import Bbox
 
@@ -72,8 +73,19 @@ DPI = 100
 #: the widest a colourbar gets, as a share of the width of the picture it keys
 BAR_SHARE = 0.08
 #: the least of its canvas a picture has to be painted across before a bar measures the painting
-#: rather than the canvas it was painted on: a bar the length of a line is a key nobody can read
-BAR_MIN_PAINT = 0.25
+#: rather than the canvas it was painted on: a bar the length of a line is a key nobody can read.
+#: A function on a 1D mesh is painted across 0.7% of the rows of its canvas, and a 6 x 1.2 pipe
+#: across 21%, so the line is told from the pipe well short of either
+BAR_MIN_PAINT = 0.05
+#: how many times wider than tall a picture is painted before its bar goes underneath it: a bar
+#: beside a picture is as long as the picture is tall, and that is too short to read on a pipe
+BAR_TURN = 2.0
+#: the longest a colourbar gets for its width, which is what :data:`BAR_SHARE` gives way to
+#: under a picture much wider than it is tall: past this a bar is a line with labels on it
+BAR_MAX_ASPECT = 30.0
+#: the gap matplotlib leaves between a picture and its bar, per side, as a share of the room;
+#: under an axis with its frame off, every side gets the gap the right-hand side gets
+_BAR_PAD = {"right": 0.05, "left": 0.10, "top": 0.05, "bottom": 0.15}
 
 # every keyword of the renderer, and of the camera it builds, is a keyword of a plot; the names
 # come from the signatures rather than a list, so a knob added there arrives here by itself
@@ -168,10 +180,22 @@ def Plot(obj=None, ax=None, *, mesh=None, colorbar=False, width=WIDTH, height=HE
     a raster and matplotlib is told how big it is, which is what keeps a savefig at one figure
     dpi exactly the pixels the renderer made.  They default to the canvas a page opens with.
 
+    ``fit="box"`` frames the box of the picture instead of the bounding sphere the page frames,
+    so a long mesh fills the canvas instead of a strip across it (see
+    :func:`ngsplot.scene.paint`), and then one of ``width`` and ``height`` may be ``None``: it is
+    sized to the box, which gives a canvas of the picture's own shape.  ``Draw``'s ``center``
+    and ``radius`` are the other way to frame a picture, and are not asked for together with it.
+    ``view`` is a camera framed beforehand -- :func:`ngsplot.frame` takes the same ``fit``,
+    ``width`` and ``height`` and paints nothing -- and brings its canvas with it, so a figure can
+    be laid out for the picture first and a time loop frames its mesh once.
+
     The rest of the keywords are the panel's knobs, spelled as the renderer spells them; see the
     module docstring for which is which.  ``colorbar=True`` puts a bar next to the picture, in
     the same bands and between the same ends, and takes the room for it out of the picture --
     beside taking the frame off, the only two things a plot does to an axis it did not make.
+    ``colorbar`` may also be a dict of the keywords of :func:`colorbar`, which is the same bar
+    asked for in other words: ``colorbar={"orientation": "horizontal"}``, or
+    ``colorbar={"cax": slot}`` for a bar in a place of the caller's own.
 
     The point of view is ``elev``, ``azim`` and ``roll``, in degrees -- the three angles of
     ``Axes3D.view_init``, put on a camera that stays where the page put it.  Left out, they are
@@ -181,9 +205,15 @@ def Plot(obj=None, ax=None, *, mesh=None, colorbar=False, width=WIDTH, height=HE
 
     Returns the :class:`~matplotlib.image.AxesImage`.  Plotting twice into one axis replaces the
     picture rather than laying a second under it, which is what an animation of a time loop
-    needs; titles, labels and colourbars are left to whoever made them.
+    needs; titles, labels and colourbars are left to whoever made them.  A bar the plot put up
+    goes with a picture that no longer asks for it, and a bar on a ``cax`` of the caller's stays
+    and keys the new picture instead, since the place it stands in is the caller's.
     """
-    width, height = int(width), int(height)
+    width = None if width is None else int(width)
+    height = None if height is None else int(height)
+    ask = _bar_ask(colorbar)
+    if kwargs.get("fit") is not None and {"center", "radius"} & set(kwargs):
+        raise TypeError("fit frames the picture, and so do center and radius; ask for one")
     if "euler_angles" in kwargs:
         raise TypeError("the point of view is spelled elev, azim and roll here, the three "
                         "angles of matplotlib's view_init; euler_angles is what a page's camera "
@@ -194,6 +224,10 @@ def Plot(obj=None, ax=None, *, mesh=None, colorbar=False, width=WIDTH, height=HE
         raise TypeError("Plot needs something to draw: a GridFunction, a CoefficientFunction "
                         "with mesh=, a Mesh, or the payload of one")
     payload, renderer = _split(obj, mesh, kwargs)
+    view = renderer.get("view")
+    if view is not None and (width, height) == (WIDTH, HEIGHT):
+        # the page's canvas is what a plot gets when it names none, and a view names its own
+        width = height = None
     if eval is not None:
         if "function_mode" in renderer:
             raise TypeError("eval and function_mode are the same knob asked for twice")
@@ -203,14 +237,18 @@ def Plot(obj=None, ax=None, *, mesh=None, colorbar=False, width=WIDTH, height=HE
     axes = gca() if ax is None else ax
     if axes not in _bare_axes:
         axes.set_axis_off()  # a picture needs no rulers in pixels; set_axis_on puts them back
-    _retire(axes, keep_bar=colorbar)
-    image = axes.imshow(canvas.to_uint8(), extent=(0.0, float(width), float(height), 0.0),
+    _retire(axes, keep_bar=ask is not None)
+    image = axes.imshow(canvas.to_uint8(),
+                        extent=(0.0, float(canvas.width), float(canvas.height), 0.0),
                         origin="upper", interpolation="nearest")
     _plotted.setdefault(axes, []).append(image)
     _pictures[image] = _painted_with(payload, renderer)
     _state["last"] = weakref.ref(image)
-    if colorbar:
-        _colorbar(image)
+    standing = _bars.get(axes)
+    if ask is None and standing is not None:
+        ask = standing["kwargs"]  # a bar on the caller's cax keys whatever is painted here
+    if ask is not None:
+        _colorbar(image, **ask)
     return image
 
 
@@ -222,20 +260,27 @@ def colorbar(image=None, **kwargs):
     asked for.  So the bar is built on a private mappable carrying the texture and the range the
     picture was painted with, and the bands come out as bands -- a ``BoundaryNorm`` on the
     ``ListedColormap`` of the page's ramp -- with the edges of the bands ticked, which is the
-    same scale the panel's two fields hold.
+    same scale the panel's two fields hold.  Every edge is ticked, and as many of them labelled
+    as the bar has room for at the size it is drawn: every second edge, every fourth, down to
+    the two ends, so a label always sits on the end of a band and the two ends are always read.
 
     With no argument it takes the last picture plotted here.  ``mesh`` has no colours to put a
     bar against and says so.  Left to itself a bar is measured against the picture it keys: as
-    long as that picture is drawn, and no wider than :data:`BAR_SHARE` of it.  The numbers
-    matplotlib sizes a bar with -- ``shrink``, ``fraction``, ``aspect`` and the ``orientation``
-    that turns them -- are whoever asks for the bar's to name, and a bar given a ``cax`` of its
-    own is sized by whoever made that.
+    long as that picture is drawn, and no wider than :data:`BAR_SHARE` of it -- nor thinner than
+    its length over :data:`BAR_MAX_ASPECT`, which is where a picture far wider than tall gives
+    way.  It stands beside the picture, or underneath one painted more than :data:`BAR_TURN`
+    times as wide as it is tall, where a bar beside it would be too short to label.  The numbers
+    matplotlib sizes a bar with -- ``shrink``, ``fraction``, ``aspect``, ``pad`` and the
+    ``orientation`` or ``location`` that turns them -- are whoever asks for the bar's to name,
+    and a bar given a ``cax`` of its own is sized by whoever made that.
 
     One bar stands beside an axis.  A repaint hands that bar the bands and the ends of the new
     picture rather than building another one and carving the room for it out again, so a time
-    loop keeps the bar it was handed and the picture keeps the room it gave up once.  The bar
-    goes when a picture is plotted without asking for one, or when it is asked for in other
-    words -- a bar built with ticks of its own is not talked into a different kind of bar.
+    loop keeps the bar it was handed and the picture keeps the room it gave up once.  A bar the
+    plot put up goes when a picture is plotted without asking for one; a bar on a ``cax`` of the
+    caller's stays, and keys each picture painted on its axis after it.  Either goes when it is
+    asked for in other words -- a bar built with ticks of its own is not talked into a different
+    kind of bar, and a bar asked for on another ``cax`` takes the place of the one on the first.
     """
     image = _last_plotted() if image is None else image
     picture = _pictures.get(image)
@@ -247,33 +292,108 @@ def colorbar(image=None, **kwargs):
     boundaries = np.linspace(picture["low"], picture["high"], len(pal) + 1)
     cmap = _colormap.to_matplotlib(pal)
     norm = mcolors.BoundaryNorm(boundaries, len(pal))
+    figure = image.axes.get_figure()
     standing = _bars.get(image.axes)
     live = standing is not None and _stands(standing["bar"])
-    geometry = _bar_geometry(image, kwargs, _cell(image.axes, standing["bar"] if live else None))
-    reuse = (live and _same_ask(standing["kwargs"], kwargs)
-             and _fits(standing["geometry"], geometry))
-    if reuse:
+    carved = live and "cax" not in standing["kwargs"]
+    geometry = _bar_geometry(image, kwargs, _cell(image.axes, standing if carved else None))
+    if (live and _same_ask(standing["kwargs"], kwargs)
+            and _fits(standing["geometry"], geometry)):
         # matplotlib's own way of telling a bar that what it keys has changed: the mappable keeps
         # its place in the bar, and the bar reads the ramp and the scale off it and redraws
-        mappable = standing["mappable"]
+        bar, mappable = standing["bar"], standing["mappable"]
         mappable.set_cmap(cmap)
         mappable.set_norm(norm)
-        standing["bar"].update_normal(mappable)
-        return standing["bar"]
-    if live:
-        standing["bar"].remove()  # the room comes back before the new bar takes it
-    mappable = ScalarMappable(cmap=cmap, norm=norm)
-    mappable.set_array([])
-    # a bar hands the room it took back to the axis it reads off its mappable; a private mappable
-    # has no axis of its own unless we give it the one the picture sits in
-    mappable.axes = image.axes
-    bar = image.axes.get_figure().colorbar(mappable, ax=image.axes, **geometry)
-    _bars[image.axes] = {"bar": bar, "mappable": mappable, "kwargs": kwargs, "geometry": geometry}
+        bar.update_normal(mappable)
+    else:
+        if live:
+            _take_down(image.axes, standing)  # the room comes back before the new bar takes it
+        cax = kwargs.get("cax")
+        if cax is not None and cax.get_figure() is figure and cax not in figure.axes:
+            # the place the last bar stood in, asked for again in other words: the caller's
+            # axis went with that bar, and comes back empty for this one
+            cax.cla()
+            figure.add_axes(cax)
+        mappable = ScalarMappable(cmap=cmap, norm=norm)
+        mappable.set_array([])
+        room = None
+        if cax is None:
+            # a bar hands the room it took back to the axis it reads off its mappable; a private
+            # mappable has no axis of its own unless we give it the one the picture sits in.  A
+            # bar on the caller's cax took no room, and matplotlib would hand the picture the
+            # cell of the cax's own grid instead
+            mappable.axes = image.axes
+            room = (image.axes.get_position(original=True).frozen(), image.axes.get_anchor())
+        bar = figure.colorbar(mappable, ax=image.axes, **geometry)
+        _bars[image.axes] = {"bar": bar, "mappable": mappable, "kwargs": kwargs,
+                             "geometry": geometry, "room": room}
+    if "ticks" not in kwargs:
+        # set after every update_normal, which puts matplotlib's own locator back
+        bar.locator = _BandEdges(boundaries)
     return bar
 
 
 #: ``Plot(colorbar=True)`` reaches the function above under this name, its own keyword shadowing it
 _colorbar = colorbar
+
+
+def _bar_ask(colorbar):
+    """The keywords a plot's ``colorbar`` asks for a bar in, or ``None`` for no bar asked."""
+    if isinstance(colorbar, dict):
+        return dict(colorbar)
+    if colorbar is None or isinstance(colorbar, (bool, np.bool_)):
+        return {} if colorbar else None
+    raise TypeError("colorbar is True, False, or a dict of the keywords of pyplot.colorbar, "
+                    f"not a {type(colorbar).__name__}")
+
+
+class _BandEdges(ticker.Locator):
+    """The edges of a picture's bands, as many of them as its bar has room to label.
+
+    Every edge is a tick, which is what the page's own scale holds, but a label per edge is
+    unreadable once the bands are denser than the font -- nine labels on a bar the height of a
+    pipe.  So the edges are labelled every second, every fourth, every ``k``-th for a ``k`` that
+    divides the band count, which keeps a label on both ends and an equal number of bands
+    between two labels, and the step is the smallest whose labels fit.  What fits is read at
+    draw time off the size the bar is drawn at and the size of its labels: a label along a
+    vertical bar needs two font sizes, matplotlib's own spacing for a y axis, and one across a
+    horizontal bar needs its own width, which is measured from the labels the bar's formatter
+    makes, at three fifths of a font size a character, plus one font size between two of them.
+    The two ends are labelled however short the bar is.
+    """
+
+    def __init__(self, edges):
+        self.edges = np.asarray(edges, dtype=np.float64)
+
+    def __call__(self):
+        return self.tick_values(None, None)
+
+    def tick_values(self, vmin, vmax):
+        bands = len(self.edges) - 1
+        room = self._room()
+        for step in range(1, bands + 1):
+            if bands % step == 0 and bands // step + 1 <= room:
+                return self.edges[::step]
+        return self.edges[[0, -1]]
+
+    def _room(self):
+        """How many labels fit along the axis, as it is drawn now."""
+        axis = self.axis
+        if axis is None:
+            return len(self.edges)
+        figure = axis.axes.figure
+        box = axis.axes.bbox
+        size = axis.get_major_ticks(1)[0].label1.get_size()
+        if axis.axis_name == "y":
+            length, spacing = box.height, 2.0 * size
+        else:
+            labels = axis.major.formatter.format_ticks(self.edges)
+            length, spacing = box.width, (0.6 * max(map(len, labels), default=1) + 1.0) * size
+        if not spacing > 0:
+            return len(self.edges)
+        # the labels at the two ends may hang over the ends of the bar, so n of them need n - 1
+        # spacings and not n
+        return int(length * 72.0 / figure.dpi // spacing) + 1
 
 
 def _split(obj, mesh, kwargs):
@@ -343,23 +463,44 @@ def _bare(axes):
     return axes
 
 
-def _cell(axes, bar=None):
-    """The room an axis was given, before a bar of ours took any of it away.
+def _cell(axes, standing=None):
+    """The room an axis was given, before the bar of ours ``standing`` beside it took any away.
 
     A bar carves its room out of the picture's cell and keeps the piece it carved, so the two
     pieces laid side by side are the cell again.  The picture's axis reports the narrowed one on
     its own, and a bar sized against that would be sized against what the last bar left behind.
+    An axis placed by hand has no cell to read back, and its own record of where it was placed is
+    overwritten by the bar (see :func:`_take_down`), so its room is the one the bar recorded.
     """
     figure = axes.get_figure()
     spec = axes.get_subplotspec()
     if figure is None or spec is None:
+        if standing is not None and standing["room"] is not None:
+            return standing["room"][0]
         return axes.get_position(original=True)
     cell = spec.get_position(figure)
-    if bar is not None:
-        taken = bar.ax.get_subplotspec()
+    if standing is not None:
+        taken = standing["bar"].ax.get_subplotspec()
         if taken is not None:
             cell = Bbox.union([cell, taken.get_position(figure)])
     return cell
+
+
+def _take_down(axes, standing):
+    """Remove a bar of ours, and give the axis beside it back the room the bar took.
+
+    matplotlib does that for an axis in a grid, from the grid; an axis placed by hand has its
+    position carved down when the bar is made, its original position included
+    (``matplotlib/colorbar.py``, ``make_axes``, by ``_set_position``), so ``Colorbar.remove``
+    has nothing left to put back, and a picture repainted with its bar would shrink by a bar's
+    width every time.  The bar recorded the room and the anchor it found, and they go back here.
+    """
+    standing["bar"].remove()
+    room = standing.get("room")
+    if room is not None and axes.get_subplotspec() is None:
+        position, anchor = room
+        axes._set_position(position)
+        axes.set_anchor(anchor)
 
 
 def _painted(array):
@@ -393,9 +534,16 @@ def _bar_geometry(image, kwargs, cell):
 
     A bar is sized by the room it shares with the picture, but the picture keeps the shape it was
     painted in and leaves the rest of that room empty, so the two disagree whenever their shapes
-    do -- the bar then stands over the picture and takes room the picture could have used.  Both
+    do -- the bar then stands over the picture and takes room the picture could have used.  The
     rules here are caps: the bar spans no more of the cell than the picture spans of it, and it
-    never gives up more of the axis than matplotlib would have given up on its own.
+    is no wider than :data:`BAR_SHARE` of the picture -- unless that would make it longer than
+    :data:`BAR_MAX_ASPECT` times its width, which is a line and not a bar.
+
+    Which side it stands on comes first.  A picture painted more than :data:`BAR_TURN` times
+    as wide as it is tall gets its bar underneath, since a bar beside it would be as long as the
+    picture is tall.  The gap is matplotlib's for the side, and under an axis with its frame off
+    the right-hand side's for every side: the larger gaps below and on the left are the room
+    matplotlib keeps for tick labels, which a picture does not have.
 
     ``shrink`` is the share of the cell the bar spans, and it is exact -- a bar is that share of
     the cell long.  ``fraction`` is the share of the axis the picture gives up, which is the room a
@@ -404,21 +552,31 @@ def _bar_geometry(image, kwargs, cell):
     A room too narrow to hold the bar is a room the bar gets shortened into, because matplotlib
     gives a bar a row of ``shrink`` and an aspect of its own and cuts the bar to the width of its
     room times that aspect.  So the room is asked for as the bar's own width, which is what the
-    second route makes of it too, and the two agree on one bar measured by its picture.  What that
-    picture is, is the mesh inside the raster rather than the page the raster was fit onto
-    (:func:`_painted`).  Whatever is named is left named, and a bar with a ``cax`` of its own is
-    nobody's cell to size.
+    second route makes of it too, and the two agree on one bar measured by its picture -- in
+    either orientation, ``aspect`` being length over width in both.  What that picture is, is
+    the mesh inside the raster rather than the page the raster was fit onto (:func:`_painted`).
+    Whatever is named is left named, and a bar with a ``cax`` of its own is nobody's cell to
+    size.
     """
     out = dict(kwargs)
     figure = image.axes.get_figure()
     if figure is None or "cax" in out:
         return out
     inches = figure.get_size_inches()
-    horizontal = out.get("orientation", "vertical") == "horizontal"
-    pad = float(out.get("pad", 0.05))
     x0, x1, y0, y1 = image.get_extent()  # the shape imshow letterboxes to, not the array's
-    shape = abs(x1 - x0) / abs(y1 - y0) if not horizontal else abs(y1 - y0) / abs(x1 - x0)
     painted = _painted(image.get_array())
+    tall, wide = painted[0] * abs(y1 - y0), painted[1] * abs(x1 - x0)
+    if "orientation" not in out and "location" not in out:
+        out["orientation"] = "horizontal" if wide > BAR_TURN * tall else "vertical"
+    if "location" in out:
+        side = out["location"]
+    else:
+        side = "bottom" if out["orientation"] == "horizontal" else "right"
+    horizontal = side in ("top", "bottom")
+    if "pad" not in out and not image.axes.axison:
+        out["pad"] = _BAR_PAD["right"]
+    pad = float(out.get("pad", _BAR_PAD.get(side, 0.05)))
+    shape = abs(x1 - x0) / abs(y1 - y0) if not horizontal else abs(y1 - y0) / abs(x1 - x0)
     long_share, wide_share = painted if not horizontal else painted[::-1]
     along = cell.height * inches[1] if not horizontal else cell.width * inches[0]
     across = cell.width * inches[0] if not horizontal else cell.height * inches[1]
@@ -436,18 +594,17 @@ def _bar_geometry(image, kwargs, cell):
         length = float(out.get("shrink", long_side / along)) * along
         if "aspect" not in out:
             # a bar is as wide as its length over ``aspect``: ask for the cap, but never for a
-            # fatter bar than the 20 it would have stood on anyway
-            aspect = max(20.0, length / (BAR_SHARE * wide_side))
+            # fatter bar than the 20 it would have stood on anyway, nor a thinner one than a line
+            aspect = min(max(20.0, length / (BAR_SHARE * wide_side)), BAR_MAX_ASPECT)
         if "fraction" in out:
             break  # room named is room given, whatever width the bar takes in it
         # a room too narrow to hold the bar is a room the bar is cut short in, so the room a bar
-        # asks for is the width it would be: length over aspect, capped by the share of a picture
-        fraction = min(length / aspect, BAR_SHARE * wide_side) / across
+        # asks for is the width it will be: its length over its aspect
+        fraction = length / aspect / across
 
     out.setdefault("shrink", long_side / along)
     out.setdefault("fraction", fraction)
-    if not horizontal and "aspect" not in out:
-        out["aspect"] = aspect
+    out.setdefault("aspect", aspect)
     return out
 
 
@@ -457,21 +614,31 @@ def _fits(had, wants, tolerance=0.01):
     A figure resized between two pictures wants other room, and the bar is built again rather
     than argued with; a repaint at the size it stands at must leave it standing, so the numbers
     are compared loose.  Only the numbers both sides have an opinion about are compared: a bar
-    whose width a caller named keeps standing whatever the room says.
+    whose width a caller named keeps standing whatever the room says.  The side a bar stands on
+    is compared as a word, and a picture that turned from tall to wide gets its bar turned.
     """
-    return all(math.isclose(float(had[name]), float(wants[name]), rel_tol=tolerance, abs_tol=1e-3)
-               for name in ("fraction", "shrink", "aspect", "orientation")
-               if name in had and name in wants)
+    return (all(math.isclose(float(had[name]), float(wants[name]), rel_tol=tolerance,
+                             abs_tol=1e-3)
+                for name in ("fraction", "shrink", "aspect", "pad")
+                if name in had and name in wants)
+            and all(had.get(name) == wants.get(name) for name in ("orientation", "location")))
 
 
 def _retire(axes, keep_bar=False):
-    """Take the picture off an axis, and the bar beside it unless the next one will use it."""
+    """Take the picture off an axis, and the bar beside it unless something will use it.
+
+    The next picture uses the bar when it asks for one, and a bar on a ``cax`` of the caller's
+    is used whether it asks or not: that bar stands in a place the caller made, and is theirs to
+    take down.  A bar someone already took down is forgotten rather than taken down twice.
+    """
     for image in _plotted.get(axes, ()):
         image.remove()
-    if not keep_bar:
-        standing = _bars.pop(axes, None)
-        if standing is not None and _stands(standing["bar"]):
-            standing["bar"].remove()
+    standing = _bars.get(axes)
+    if standing is not None and not _stands(standing["bar"]):
+        del _bars[axes]
+    elif standing is not None and not keep_bar and "cax" not in standing["kwargs"]:
+        del _bars[axes]
+        _take_down(axes, standing)
     _plotted[axes] = []
 
 
@@ -491,9 +658,12 @@ def _same_ask(had, wants):
 
     Told by what the keywords spell: a bar built with ticks, a formatter or its own ``cax``
     cannot be talked into the different kind of bar those other words ask for, so a differently
-    asked-for bar is built again and the room goes with the old one.
+    asked-for bar is built again and the room goes with the old one.  A ``cax`` is told by which
+    axis it is, since two axes can spell the same.
     """
-    return repr(had) == repr(wants)
+    return had.keys() == wants.keys() and all(
+        had[name] is wants[name] if name == "cax" else repr(had[name]) == repr(wants[name])
+        for name in had)
 
 
 def _last_plotted():

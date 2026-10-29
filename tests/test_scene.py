@@ -444,3 +444,41 @@ def test_the_same_call_twice_is_the_same_picture():
     assert np.array_equal(first.color, again.color)
     third = scene.paint(render_data, width=width, height=height, ncolors=2)
     assert not np.array_equal(first.color, third.color)
+
+
+# ------------------------------------------------------------------------ framing a box
+
+def painted_extent(canvas):
+    """Columns and rows a canvas was painted across, as ``(width, height)`` in pixels."""
+    ink = (canvas.to_uint8()[..., :3] < 250).any(axis=-1)
+    rows, columns = np.flatnonzero(ink.any(axis=1)), np.flatnonzero(ink.any(axis=0))
+    return columns[-1] - columns[0] + 1, rows[-1] - rows[0] + 1
+
+
+def test_a_picture_framed_by_its_box_fills_the_canvas_the_sphere_left_empty():
+    """The square of ``surface_scalar`` on a three-to-two canvas: its sphere is framed to the
+    height, and its box is the square, framed to the height as well, larger by the corners the
+    sphere had to leave room for."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    sphere = painted_extent(scene.paint(payload, width=900, height=600))
+    box = painted_extent(scene.paint(payload, width=900, height=600, fit="box"))
+    assert box[1] == pytest.approx(600 * 0.9158, abs=3)
+    assert box[1] / sphere[1] == pytest.approx(np.sqrt(2.0), rel=0.02)
+
+
+def test_a_side_left_to_the_box_is_the_box_and_a_margin():
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    canvas = scene.paint(payload, width=None, height=300, fit="box")
+    assert canvas.height == 300 and canvas.width == pytest.approx(300, abs=1)
+    width, height = painted_extent(canvas)
+    assert width == pytest.approx(height, abs=2)
+
+
+def test_a_framing_nobody_knows_is_refused():
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    with pytest.raises(ValueError, match="sphere"):
+        scene.paint(payload, width=90, height=60, fit="tight")
+    with pytest.raises(TypeError, match="fit"):
+        scene.paint(payload, width=90, height=None)
+    with pytest.raises(TypeError, match="fit"):
+        scene.paint(payload, width=None, height=None, fit="box")
