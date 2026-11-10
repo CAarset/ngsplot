@@ -19,7 +19,7 @@ import numpy as np
 
 __all__ = ["index_pairs", "names", "vec_names", "bernstein", "evaluate",
            "vector_values", "derivatives", "normal", "get_value", "lattice",
-           "subtriangles"]
+           "subtriangles", "curve_basis", "curve_vector_values", "curve"]
 
 _NAMES = {
     1: ["p0", "p1", "p2"],
@@ -240,12 +240,25 @@ def evaluate(order, ctrl, u, v, *, vectors=None, deformation=0.0, mode="none",
         vv = np.zeros(pv.shape[:-1] + (2,), dtype=pv.dtype)
     else:
         vv = vector_values(order, vectors, u, v)
-    disp = np.stack([value, vv[..., 0], vv[..., 1]], axis=-1) * deformation
+    value3 = np.stack([value, vv[..., 0], vv[..., 1]], axis=-1)
+    return _displace(xyz, value3, deformation, mode, function_mode, complex_scale), value
+
+
+def _displace(xyz, value3, deformation, mode, function_mode, complex_scale):
+    """The two statements a vertex program adds to the blended position.
+
+    ``DEFORMATION`` pushes the point by ``deformation * value_`` and ``DEFORMATION_2D``
+    lifts ``z`` by ``GetValue(deformation * value_)``: ``trigsplines.vert:25-30`` for a
+    surface, ``splines.vert:73-77`` for a curve.  ``value3`` is the program's ``value_``,
+    whose first component is the blended 4th control-point component and whose other two
+    are the blended vector attributes.
+    """
+    disp = value3 * deformation
     if mode == "3d":
-        return xyz + disp, value
+        return xyz + disp
     if mode == "2d":
         z = xyz[..., 2] + get_value(disp, function_mode, complex_scale)
-        return np.concatenate([xyz[..., :2], z[..., None]], axis=-1), value
+        return np.concatenate([xyz[..., :2], z[..., None]], axis=-1)
     raise ValueError(f"unknown deformation mode {mode!r}")
 
 
@@ -299,3 +312,57 @@ def _deform(d, dvec, deformation, target, src):
     add = deformation * d[..., 3][..., None] if dvec is None else deformation * dvec[..., src]
     out[..., target] = d[..., target] + add
     return out
+
+
+def curve_basis(order, t):
+    """Degree-``order`` (1..3) Bernstein basis along a curve, in attribute order.
+
+    Order 1 evaluates ``t * p0 + (1.0 - t) * p1`` (``splines.vert:28``), which is the
+    reverse of the usual convention: an instance runs from ``p1`` to ``p0``, and the
+    vector attributes at :29 blend the same way.  Orders 2 and 3 use the ordinary
+    polynomials, ``:32-36`` and ``:40-46``.
+    """
+    order = _check_order(order)
+    t = np.asarray(t)
+    dtype = np.result_type(t, float)
+    t = t.astype(dtype, copy=False)
+    if order == 1:
+        return np.stack([t, 1.0 - t], axis=-1)
+    s = 1.0 - t
+    if order == 2:
+        terms = [s * s, 2.0 * t * s, t * t]
+    else:
+        terms = [s * s * s, 3.0 * t * s * s, 3.0 * t * t * s, t * t * t]
+    return np.stack(terms, axis=-1)
+
+
+def curve_vector_values(order, vectors, t):
+    """The two packed vector components of a curve instance, same basis as its position."""
+    return _weighted(curve_basis(order, t), np.asarray(vectors))
+
+
+def curve(order, ctrl, t, *, vectors=None, deformation=0.0, mode="none",
+          function_mode=0.0, complex_scale=(1.0, 0.0)):
+    """Position and value of a curve instance at the parameter values ``t``.
+
+    ``ctrl`` holds the vec4 control points ``(x, y, z, value)`` of the instance
+    attributes ``p0..p3``, ``vectors`` the two components of ``v0..v3``, as
+    ``three/edges.ts:114-140`` and ``three/mesh.ts:200-230`` fill them.  The return is
+    ``(xyz, value)`` with ``value`` the program's ``value_``: the blended 4th component
+    in ``x``, which ``splines.vert:54`` copies out of ``ps.w``, and the blended vectors
+    in ``y`` and ``z``.  ``mode`` and ``function_mode`` select the displacement of
+    :func:`_displace`.
+    """
+    order = _check_order(order)
+    basis = curve_basis(order, t)
+    pv = _weighted(basis, np.asarray(ctrl))
+    xyz, scalar = pv[..., :3], pv[..., 3]
+    if vectors is None:
+        vv = np.zeros(pv.shape[:-1] + (2,), dtype=pv.dtype)
+    else:
+        vv = curve_vector_values(order, vectors, t)
+    value3 = np.concatenate([scalar[..., None], vv], axis=-1)
+    deformation = float(deformation)
+    if mode == "none" or deformation == 0.0:
+        return xyz, value3
+    return _displace(xyz, value3, deformation, mode, function_mode, complex_scale), value3

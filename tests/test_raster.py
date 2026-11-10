@@ -397,6 +397,93 @@ def test_equal_depth_overwrites_by_default_because_three_uses_less_equal():
     assert np.array_equal(strict.depth, alone.depth)
 
 
+# -------------------------------------------------------------------------- polygon offset
+#
+# ``mesh.ts:65-67`` is the only place in the renderer that asks for a polygon offset: the
+# surface material gets ``gl.polygonOffset(1, 1)``, which pushes every one of its fragments
+# away from the camera by ``factor * m + units * r`` in window depth, ``m`` the steepest
+# slope of that triangle on the screen and ``r`` the smallest step the depth buffer can
+# hold.  The wireframe lies exactly in the surface and carries no offset, so without this
+# it loses the depth test wherever its depth comes out a rounding step behind -- which in
+# the recorded picture is a quarter of the line ink.
+
+
+def flat_triangle():
+    """A triangle in window space, its corners and a constant depth, for the offset rule."""
+    return np.array([0.0, 400.0, 100.0]), np.array([0.0, 0.0, 300.0])
+
+
+def test_a_flat_triangle_is_pushed_back_by_exactly_one_depth_step():
+    x, y = flat_triangle()
+    z = np.array([0.4, 0.4, 0.4])
+    assert raster.polygon_offset(x, y, z) == pytest.approx(raster.DEPTH_RESOLUTION)
+
+
+def test_the_offset_follows_the_steepest_depth_slope_on_the_screen():
+    # depth climbs 0.002 per pixel to the right and 0.005 per pixel downwards; the offset
+    # is the larger of the two, since that is the slope the polygon is guaranteed not to
+    # exceed anywhere on the screen
+    x = np.array([0.0, 500.0, 0.0])
+    y = np.array([0.0, 0.0, 100.0])
+    z = np.array([0.5, 0.5 + 0.002 * 500.0, 0.5 + 0.005 * 100.0])
+    assert raster.polygon_offset(x, y, z) == pytest.approx(0.005 + raster.DEPTH_RESOLUTION)
+    # turning the same triangle a quarter turn swaps its slopes, and with them nothing
+    assert raster.polygon_offset(y, x, z) == pytest.approx(0.005 + raster.DEPTH_RESOLUTION)
+
+
+def test_a_triangle_that_collapses_to_a_line_has_no_slope_to_offset():
+    x = np.array([0.0, 100.0, 200.0])
+    y = np.array([0.0, 100.0, 200.0])
+    z = np.array([0.5, 0.6, 0.7])
+    assert raster.polygon_offset(x, y, z) == pytest.approx(raster.DEPTH_RESOLUTION)
+
+
+def chord(a, b, z=0.0):
+    """One order-1 line instance straight from ``a`` to ``b``, at height ``z``."""
+    ctrl = np.zeros((1, 2, 4), dtype=np.float64)
+    ctrl[0, 0, :2], ctrl[0, 1, :2] = a, b
+    ctrl[0, :, 2] = z
+    return ctrl
+
+
+def depth_per_unit_z(cam):
+    """What a unit of object ``z`` costs in window depth, where this camera looks.
+
+    Negative, since ``z`` grows towards the camera and window depth away from it.
+    """
+    here, there = cam.project(np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 1.0e-4]]))
+    return (there[2] - here[2]) / 1.0e-4
+
+
+def test_the_surface_offset_lets_a_coplanar_line_draw_over_the_surface():
+    cam = camera_for()
+    step = raster.DEPTH_RESOLUTION / abs(depth_per_unit_z(cam))
+    alone = canvas_for(samples=1)
+    paint(alone, cam, element(), function_values=False)
+
+    # the ends of the chord stay inside the element, so the surface is everything the line
+    # can meet; a hair behind it, it still wins, and it wins with its own depth
+    canvas = canvas_for(samples=1)
+    paint(canvas, cam, element(), function_values=False)
+    raster.paint_wireframe(canvas, cam, 1, chord([-0.2, 0.0], [0.2, 0.0], z=-0.5 * step))
+    drawn = np.any(canvas.color[..., :3] != alone.color[..., :3], axis=-1)
+    assert drawn.any(), "a line half a depth step behind the surface should still draw"
+    line_depth = cam.project(np.array([[0.0, 0.0, -0.5 * step]]))[0, 2]
+    face_depth = cam.project(np.array([[0.0, 0.0, 0.0]]))[0, 2]
+    assert line_depth > face_depth, "vacuous: the line is not behind the surface"
+    black = drawn & (canvas.color[..., 0] < 0.05)
+    rows, cols = np.nonzero(black)
+    assert rows.size > 5, "vacuous: no pixel of the line is fully covered"
+    assert np.allclose(canvas.depth[rows, cols], line_depth, atol=2 * raster.DEPTH_RESOLUTION)
+
+    # eight depth steps behind: outside the offset, so the surface keeps every pixel
+    canvas = canvas_for(samples=1)
+    paint(canvas, cam, element(), function_values=False)
+    raster.paint_wireframe(canvas, cam, 1, chord([-0.2, 0.0], [0.2, 0.0], z=-8.0 * step))
+    assert np.array_equal(canvas.color, alone.color), "the offset should not reach that far"
+    assert np.array_equal(canvas.depth, alone.depth)
+
+
 # ----------------------------------------------------------------------- degenerate input
 
 
