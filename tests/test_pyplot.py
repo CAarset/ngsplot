@@ -25,6 +25,7 @@ from matplotlib import image as mplimage  # noqa: E402
 from matplotlib import pyplot as mpl  # noqa: E402
 from matplotlib.transforms import Bbox  # noqa: E402
 
+import ngsplot  # noqa: E402
 from ngsplot import colormap, pyplot, scene  # noqa: E402
 
 import gtdata  # noqa: E402
@@ -282,6 +283,27 @@ def test_repainting_a_colourbar_keeps_the_room_it_took_the_first_time():
     assert len(figure.axes) == 2
 
 
+def test_a_colourbar_beside_an_axis_placed_by_hand_keeps_its_room_through_repaints():
+    """``make_axes`` carves an axis without a grid by overwriting its position, the original
+    one too, so ``Colorbar.remove`` has nothing to put back: a bar measured against what the last
+    one left came out narrower each frame and was rebuilt, and the picture lost a bar's width a
+    frame -- 0.92, 0.85, 0.78 of the figure on a pipe."""
+    payload = wide_payload()
+    figure = mpl.figure(figsize=(4.0, 1.2))
+    panel = figure.add_axes([0.0, 0.0, 1.0, 1.0])
+    standing, place = None, None
+    for _ in range(4):
+        pyplot.Plot(payload, ax=panel, width=400, height=None, fit="box", colorbar=True)
+        (bar,) = bars_of(figure)
+        standing = bar if standing is None else standing
+        assert bar is standing, "the bar is repainted, not built again"
+        place = panel.get_position().bounds if place is None else place
+        assert panel.get_position().bounds == pytest.approx(place)
+    pyplot.Plot(payload, ax=panel, width=400, height=None, fit="box")
+    assert not bars_of(figure)
+    assert panel.get_position(original=True).bounds == pytest.approx((0.0, 0.0, 1.0, 1.0))
+
+
 def test_a_repainted_colourbar_is_the_bar_of_the_picture_it_was_repainted_with():
     """The bar that stands is repainted rather than replaced, so it has to carry the ramp, the
     band count and the range of the newest picture beside it, not the ones it was built with."""
@@ -527,3 +549,239 @@ def test_a_plot_replaces_the_picture_rather_than_lying_under_it():
     image = pyplot.Plot(gtdata.render_data_of("dims/cf_vector"))
     assert len(axes.get_images()) == 1
     assert axes.get_title() == "later"
+
+
+# ---------------------------------------------------------------- a bar for a long picture
+
+def wide_payload(length=5.0):
+    """A ``length`` by 1 rectangle with a field on it: the shape of a pipe or a channel, which
+    is the shape a bar beside the picture is too short for."""
+    ngs, _ = ngsolve_objects()
+    from netgen.geom2d import SplineGeometry
+
+    geometry = SplineGeometry()
+    geometry.AddRectangle((0.0, 0.0), (length, 1.0))
+    mesh = ngs.Mesh(geometry.GenerateMesh(maxh=0.4))
+    gfu = ngs.GridFunction(ngs.H1(mesh, order=2))
+    gfu.Set(ngs.sin(ngs.x) * ngs.y)
+    from ngsplot import render_data
+    return render_data(gfu)
+
+
+def bars_of(figure):
+    return [axes for axes in figure.axes if axes.get_label() == "<colorbar>"]
+
+
+def labelled(bar):
+    """The edges a bar labels, once it has been drawn at the size it stands at."""
+    bar.ax.get_figure().canvas.draw()
+    return np.asarray(bar.long_axis.get_majorticklocs())
+
+
+def test_a_plot_takes_the_words_its_colourbar_is_asked_for_in():
+    """``colorbar=`` is the bar or none, or the keywords of the bar, which is how a plot in a
+    loop asks for a bar of its own kind without a second call."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    image = pyplot.Plot(payload, colorbar={"orientation": "horizontal", "label": "u"})
+    bar = pyplot._bars[image.axes]["bar"]
+    assert bar.orientation == "horizontal"
+    assert bar.ax.get_xlabel() == "u"
+    with pytest.raises(TypeError, match="colorbar"):
+        pyplot.Plot(payload, colorbar="horizontal")
+
+
+def test_a_picture_much_wider_than_tall_is_keyed_from_underneath():
+    """A bar beside a picture is as long as the picture is tall, which on a pipe is a sliver
+    with nine labels on it; underneath, it is as long as the pipe."""
+    payload = wide_payload()
+    figure = mpl.figure(figsize=(15.6, 8.6))
+    panel = figure.add_subplot(figure.add_gridspec(2, 3)[0, 0])
+    image = pyplot.Plot(payload, ax=panel, colorbar=True)
+    figure.canvas.draw()
+    picture = painted_box(image, figure)
+    assert picture.width > pyplot.BAR_TURN * picture.height * figure.get_figheight() \
+        / figure.get_figwidth()
+    bar, = bars_of(figure)
+    box = bar.get_position()
+    assert box.width == pytest.approx(picture.width, rel=0.03)
+    assert box.y1 <= picture.y0, "the bar stands under the picture"
+    # no thinner than a line, no fatter than matplotlib's own
+    long = box.width * figure.get_figwidth()
+    thick = box.height * figure.get_figheight()
+    assert 20.0 * 0.99 <= long / thick <= pyplot.BAR_MAX_ASPECT * 1.01
+
+
+def test_a_bar_named_long_under_a_long_picture_is_as_long_as_it_was_named():
+    """``shrink`` and ``aspect`` named together are a bar whose room is its own width; the cap
+    on the width of a bar beside a picture is not a reason to cut a named bar short.  This is
+    the bar of a live view that came out at half the length it was asked for."""
+    payload = wide_payload()
+    figure = mpl.figure(figsize=(15.6, 8.6))
+    panel = figure.add_subplot(figure.add_gridspec(2, 3)[1, 2])
+    cell = panel.get_subplotspec().get_position(figure)
+    bar = pyplot.colorbar(pyplot.Plot(payload, ax=panel), orientation="horizontal",
+                          shrink=0.96, aspect=32)
+    figure.canvas.draw()
+    assert bar.ax.get_position().width == pytest.approx(0.96 * cell.width, rel=0.01)
+
+
+def test_the_side_a_bar_stands_on_is_named_rather_than_guessed_when_it_is_named():
+    """A bar asked for upright stands upright beside a long picture, and asked for again in the
+    same words is the same bar -- the side compared as the word it is."""
+    payload = wide_payload()
+    figure = mpl.figure(figsize=(9.0, 6.0))
+    panel = figure.add_subplot(111)
+    image = pyplot.Plot(payload, ax=panel)
+    bar = pyplot.colorbar(image, orientation="vertical")
+    assert bar.orientation == "vertical"
+    assert pyplot.colorbar(image, orientation="vertical") is bar
+    assert len(bars_of(figure)) == 1
+
+
+def test_a_bar_labels_as_many_edges_as_it_has_room_for_and_always_its_ends():
+    """Every edge of a band is a tick; a label per edge is unreadable once the bands are
+    denser than the font.  The labels thin by a step that divides the band count, so the two
+    ends stay labelled and the labels stay evenly spaced in bands."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(9.0, 6.0))
+    image = pyplot.Plot(payload, ax=figure.add_subplot(111), ncolors=32)
+    bar = pyplot.colorbar(image)
+    edges = np.linspace(bar.norm.vmin, bar.norm.vmax, 33)
+    shown = labelled(bar)
+    assert 2 < len(shown) < len(edges)
+    assert shown[0] == pytest.approx(edges[0]) and shown[-1] == pytest.approx(edges[-1])
+    step = 32 // (len(shown) - 1)
+    assert 32 % step == 0
+    np.testing.assert_allclose(shown, edges[::step])
+    # every edge is still marked, as a minor tick where it carries no label
+    np.testing.assert_allclose(np.sort(np.r_[bar.long_axis.get_minorticklocs(), shown]), edges,
+                               atol=1e-12)
+
+    # a bar as short as a line still says where its scale starts and ends
+    figure = mpl.figure(figsize=(9.0, 0.6))
+    image = pyplot.Plot(payload, ax=figure.add_subplot(111), ncolors=8)
+    shown = labelled(pyplot.colorbar(image))
+    assert len(shown) == 2
+
+    # and a tall bar labels every edge of eight bands, as the page's own scale does
+    figure = mpl.figure(figsize=(9.0, 8.0))
+    image = pyplot.Plot(payload, ax=figure.add_subplot(111), ncolors=8)
+    assert len(labelled(pyplot.colorbar(image))) == 9
+
+
+def test_ticks_named_for_a_bar_are_the_ticks_it_gets():
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    image = pyplot.Plot(payload, ncolors=32)
+    bar = pyplot.colorbar(image, ticks=[0.25, 0.5])
+    np.testing.assert_allclose(labelled(bar), [0.25, 0.5])
+
+
+def test_a_bar_on_a_place_of_the_caller_s_stands_through_a_repaint():
+    """A ``cax`` is an axis the caller made, so a repaint that asks for no bar leaves it, and
+    the bar on it keys the newest picture -- where it used to take the caller's axis out of
+    the figure, so that a live view had to make a new one every frame."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(8.0, 4.0))
+    panel = figure.add_subplot(121)
+    slot = figure.add_axes([0.6, 0.1, 0.3, 0.05])
+    bar = pyplot.colorbar(pyplot.Plot(payload, ax=panel, ncolors=8), cax=slot,
+                          orientation="horizontal")
+    for frame in range(3):
+        image = pyplot.Plot(payload, ax=panel, ncolors=5 + frame, vmin=0.0, vmax=1.0 + frame)
+        assert slot in figure.axes, "the caller's axis went with the picture"
+        assert bar.cmap.N == 5 + frame and bar.norm.vmax == pytest.approx(1.0 + frame)
+    # asked for again in the same words, it is the same bar
+    assert pyplot.colorbar(image, cax=slot, orientation="horizontal") is bar
+    assert len(figure.axes) == 2
+
+
+def test_a_bar_asked_for_on_another_place_takes_the_place_of_the_first():
+    """Two axes may spell the same, so which ``cax`` a bar stands on is told by which axis it
+    is: a bar asked for on a second axis is a new bar there, and the first one goes, axis and
+    all, as it did for a script that handed a fresh axis to every frame."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(8.0, 4.0))
+    panel = figure.add_subplot(121)
+    first, second = (figure.add_axes([0.6, 0.1, 0.3, 0.05]) for _ in range(2))
+    assert repr(first) == repr(second)
+    image = pyplot.Plot(payload, ax=panel)
+    one = pyplot.colorbar(image, cax=first)
+    two = pyplot.colorbar(image, cax=second)
+    assert two is not one
+    assert first not in figure.axes and second in figure.axes
+
+
+def test_a_bar_asked_for_in_other_words_on_the_same_place_keeps_the_place():
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(8.0, 4.0))
+    panel = figure.add_subplot(121)
+    slot = figure.add_axes([0.6, 0.1, 0.3, 0.05])
+    image = pyplot.Plot(payload, ax=panel)
+    pyplot.colorbar(image, cax=slot, orientation="horizontal")
+    alone = len(slot.collections)
+    bar = pyplot.colorbar(image, cax=slot, orientation="horizontal", label="u")
+    assert slot in figure.axes and bar.ax is slot
+    assert len(slot.collections) == alone, "the first bar's colours are left under the second"
+
+
+# -------------------------------------------------------------------------- framing a box
+
+def test_a_long_picture_framed_by_its_box_fills_its_canvas():
+    """The page frames the bounding sphere, which leaves a pipe a strip across the middle of
+    the canvas; framed by its box it fills the canvas the way the sphere fills the height."""
+    payload = wide_payload()
+    sphere = pyplot.Plot(payload, width=480, height=360)
+    box = pyplot.Plot(payload, width=480, height=360, fit="box")
+    for image, share in ((sphere, 0.75), (box, 0.9)):
+        array = np.asarray(image.get_array())[..., :3]
+        columns = np.flatnonzero((array < 250).any(axis=(0, 2)))
+        filled = (columns[-1] - columns[0] + 1) / 480
+        assert (filled < share) if image is sphere else (filled > share)
+
+
+def test_a_side_left_to_the_box_gives_a_canvas_of_the_picture_s_shape():
+    payload = wide_payload()
+    image = pyplot.Plot(payload, width=400, height=None, fit="box")
+    height, width = np.asarray(image.get_array()).shape[:2]
+    assert width == 400 and 80 < height < 120     # a five-to-one box, and a margin round it
+    assert tuple(image.get_extent()) == (0.0, 400.0, float(height), 0.0)
+    with pytest.raises(TypeError, match="fit"):
+        pyplot.Plot(payload, width=400, height=None)
+
+
+def test_a_view_framed_beforehand_is_the_picture_framed_on_the_spot():
+    """``ngsplot.frame`` paints nothing and answers the canvas a box fit makes, so a figure can
+    be laid out first; a plot handed the view paints what the fit would have, on that canvas."""
+    payload = wide_payload()
+    view = ngsplot.frame(payload, width=400, height=None, fit="box")
+    framed = pyplot.Plot(payload, view=view)
+    fitted = pyplot.Plot(payload, width=400, height=None, fit="box")
+    assert np.asarray(framed.get_array()).shape[:2] == (view.height, view.width)
+    assert np.array_equal(framed.get_array(), fitted.get_array())
+    with pytest.raises(TypeError, match="view"):
+        pyplot.Plot(payload, view=view, width=300, height=200)
+
+
+def test_a_box_and_a_sphere_are_not_asked_for_together():
+    ngs, capture_dims = ngsolve_objects()
+    mesh = capture_dims.mesh_square()
+    gfu = ngs.GridFunction(ngs.H1(mesh, order=1))
+    with pytest.raises(TypeError, match="fit"):
+        pyplot.Plot(gfu, fit="box", radius=2.0)
+
+
+def test_a_bar_taken_off_a_place_of_the_caller_s_leaves_the_picture_where_it_was():
+    """``Colorbar.remove`` puts back the room a bar carved, read off the axis on its mappable --
+    and for a ``cax`` from a grid of its own it would hand the picture that grid's cell.  A bar
+    on the caller's ``cax`` carved nothing, so replacing it moves no picture."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(8.0, 6.0))
+    rows = figure.add_gridspec(2, 1)
+    panel = figure.add_subplot(rows[0])
+    slots = rows[1].subgridspec(1, 2)
+    first, second = figure.add_subplot(slots[0, 0]), figure.add_subplot(slots[0, 1])
+    image = pyplot.Plot(payload, ax=panel)
+    spec = panel.get_subplotspec()
+    pyplot.colorbar(image, cax=first)
+    pyplot.colorbar(image, cax=second)
+    assert panel.get_subplotspec() is spec

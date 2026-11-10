@@ -24,6 +24,7 @@ __all__ = [
     "CAMERA_POSITION",
     "DEG",
     "FAR",
+    "FILL",
     "FOV",
     "NEAR",
     "Camera",
@@ -51,6 +52,12 @@ FAR = 100.0
 CAMERA_POSITION = (0.0, 0.0, 3.0)
 
 DEG = np.pi / 180.0
+
+#: the share of the canvas height the page's framing gives the mesh's bounding sphere: the
+#: unit sphere seen from the camera's distance through the vertical field of view, which is
+#: ``1 / (3 tan 20°)``, about 0.916.  A picture framed by its box rather than its sphere gets
+#: the same margin, so that the two framings differ only in what they frame.
+FILL = 1.0 / (CAMERA_POSITION[2] * np.tan(0.5 * FOV * DEG))
 
 
 def matrix_from_three(elements):
@@ -279,6 +286,9 @@ class Camera:
         self.zoom = float(zoom)
         self.position = np.asarray(position, dtype=np.float64).reshape(3)
         self.quaternion = np.asarray(quaternion, dtype=np.float64).reshape(4)
+        # the turns of the object, kept so that the same view can be framed again
+        self._turns = dict(euler_angles=euler_angles, transformations=transformations,
+                           elev=elev, azim=azim, roll=roll)
         self.object = object_matrix(self.mesh_center, self.mesh_radius,
                                     euler_angles=euler_angles,
                                     transformations=transformations,
@@ -319,3 +329,114 @@ class Camera:
         """
         return np.stack(to_pixels(clip_points(points, self.model_view_projection),
                                   self.width, self.height), axis=-1)
+
+    def reframed(self, mesh_center=None, mesh_radius=None, *, width=None, height=None):
+        """The same view of the mesh, centred on and scaled by other numbers, or on another
+        canvas: what the page would show had ``BuildRenderData`` reported those."""
+        return Camera(self.mesh_center if mesh_center is None else mesh_center,
+                      self.mesh_radius if mesh_radius is None else mesh_radius,
+                      width=self.width if width is None else width,
+                      height=self.height if height is None else height,
+                      fov=self.fov, near=self.near, far=self.far, zoom=self.zoom,
+                      position=self.position, quaternion=self.quaternion, **self._turns)
+
+    def box(self, points):
+        """The pixel box ``(x0, x1, y0, y1)`` of the points in front of the camera, and their
+        median distance from it, or ``None`` when no point is."""
+        x, y, _, w = to_pixels(clip_points(points, self.model_view_projection),
+                               self.width, self.height)
+        seen = np.isfinite(x) & np.isfinite(y) & np.isfinite(w) & (w > 0.0)
+        if not seen.any():
+            return None
+        x, y = x[seen], y[seen]
+        return (x.min(), x.max(), y.min(), y.max()), float(np.median(w[seen]))
+
+    def fit(self, points, fill=FILL):
+        """This view of the mesh, framed so that the box of ``points`` fills ``fill`` of the
+        canvas on its tighter side and sits in its middle.
+
+        The page frames the bounding sphere of the mesh, which is what makes it the same
+        picture from every angle -- and a strip across the middle of the canvas for a mesh much
+        longer than it is wide.  A box is framed by moving the centre the turns are made about
+        and scaling the radius, the two numbers the page frames with, so every turn and the
+        camera itself are left as they are.  The centre moves across the screen and never
+        towards it, and the radius is never so small that a point comes nearer the camera than
+        the front of the unit sphere, where the page's own framing keeps every point: a long
+        mesh seen at a slant is framed as far as perspective allows and no further.
+
+        Seen face on, a flat mesh is framed exactly by one step, since its box on the screen
+        scales with one over the radius.  A mesh with depth grows faster than that as it comes
+        nearer, so where the step does not land the radius is bisected instead.
+
+        The box is set by the few points at its four sides, and the search projects its points
+        a few dozen times, so it searches with those few and projects all of them once at the
+        end, to see whether another has come out further at the view it found.  One that has
+        joins the few and the search runs again, which ends: the few only grow.
+        """
+        points = np.asarray(points, dtype=np.float64).reshape(-1, 3)
+        points = points[np.isfinite(points[:, 0]) & np.isfinite(points[:, 1])
+                        & np.isfinite(points[:, 2])]
+        if not len(points):
+            return self
+        # the turns, without the 1 / radius the object matrix scales them by: an object point
+        # moves on the screen by the turned image of how far it moved in the mesh
+        turn = self.model_view[:3, :3] * self.mesh_radius
+        nearest = float(((points - self.mesh_center) @ turn[2]).max())
+        floor = max(nearest, 1e-9 * self.mesh_radius)
+        view, few = self, np.zeros(0, dtype=np.int64)
+        while True:
+            x, y, _, w = to_pixels(clip_points(points, view.model_view_projection),
+                                   view.width, view.height)
+            seen = np.isfinite(x) & np.isfinite(y) & np.isfinite(w) & (w > 0.0)
+            if not seen.any():
+                return view  # nothing in front of this camera, which only the first can be
+            x, y = np.where(seen, x, np.nan), np.where(seen, y, np.nan)
+            sides = np.unique([np.nanargmin(x), np.nanargmax(x), np.nanargmin(y),
+                               np.nanargmax(y)])
+            grown = np.union1d(few, sides)
+            if grown.size == few.size:
+                return view
+            few = grown
+            view = self._framed(points[few], fill, turn, floor)
+
+    def _framed(self, points, fill, turn, floor):
+        """:meth:`fit` for points that all count, with the turns and the nearest radius found."""
+        state = {"center": self.mesh_center}
+
+        def framed(radius):
+            """The view at this radius with the box in the middle, and the share of the
+            canvas that box takes over the share it should."""
+            view = self.reframed(state["center"], radius)
+            for _ in range(8):
+                (x0, x1, y0, y1), distance = view.box(points)
+                off = np.array([0.5 * (x0 + x1) - 0.5 * view.width,
+                                0.5 * view.height - 0.5 * (y0 + y1), 0.0])
+                if np.abs(off).max() < 0.01:
+                    break
+                # mesh length per pixel at the distance of the box, the same along both axes
+                unit = 2.0 * distance * radius / (view.height * view.projection[1, 1])
+                view = view.reframed(view.mesh_center + np.linalg.solve(turn, off * unit))
+            state["center"] = view.mesh_center
+            (x0, x1, y0, y1), _ = view.box(points)
+            scale = max((x1 - x0) / (fill * view.width), (y1 - y0) / (fill * view.height))
+            return view, scale if np.isfinite(scale) and scale > 0 else 1.0
+
+        view, scale = framed(self.mesh_radius)
+        radius = max(self.mesh_radius * scale, floor)
+        view, scale = framed(radius)
+        if abs(scale - 1.0) < 1e-3 or (radius == floor and scale <= 1.0):
+            return view
+        lo, hi = floor, max(radius, self.mesh_radius)
+        while framed(hi)[1] > 1.0:
+            lo, hi = hi, 2.0 * hi
+        if framed(lo)[1] <= 1.0:
+            return framed(lo)[0]
+        for _ in range(40):
+            if hi / lo < 1.0 + 1e-4:
+                break
+            middle = np.sqrt(lo * hi)
+            if framed(middle)[1] > 1.0:
+                lo = middle
+            else:
+                hi = middle
+        return framed(hi)[0]

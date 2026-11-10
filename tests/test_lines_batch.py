@@ -28,7 +28,7 @@ that batching them changed nothing.
 
 The *filter* survives because a curve that does not project is dropped whole, before any of
 its segments are drawn: ``splines.vert:66-69`` culls the instance, not the sub-segment.  A
-batch that sorted the broken instance into its tiles anyway would sweep a mirrored ribbon of
+batch that sorted the broken instance into its windows anyway would sweep a mirrored ribbon of
 some enormous extent, and where the mirror happens to fold back inside the window it would
 paint black across the picture.  So the payload carries one curve with a control point of no
 coordinate and one behind the eye, placed so that its mirror lands *inside* the frame, and
@@ -267,7 +267,7 @@ def test_the_lines_are_drawn_in_the_order_they_are_drawn(painter):
     ``LessEqualDepth`` lets the later call cover the earlier one and ``Less`` leaves the
     earlier one holding its pixels, and both of those have to be what the loops do, which is
     the only way to tell from the picture that the batch enumerates its ribbons instance by
-    instance and segment by segment instead of in the order its tiles happened to come out.
+    instance and segment by segment instead of in the order its windows happened to come out.
     """
     batched, oracle = PAINTERS[painter]
     ctrl = curves("bent")
@@ -331,7 +331,7 @@ def test_a_curve_is_culled_as_a_curve_and_not_as_a_set_of_segments(painter):
 
     ``splines.vert:66-69`` culls the vertex of the *instance*, and the ``discard`` that feeds
     the fragment program takes the whole curve out of the draw.  It is the one filter whose
-    work a tile cannot do afterwards, and so the one a batch could move to the wrong place:
+    work a window cannot do afterwards, and so the one a batch could move to the wrong place:
     the behind-the-eye curve has no corner left anywhere the canvas is, but a curve crossing
     the eye plane has six of its seven samples in front of it and well inside the frame.  A
     batch that tested the three corners of each ribbon would draw five of its six segments
@@ -475,9 +475,8 @@ def test_ribbons_of_very_different_boxes_share_one_stack(painter):
 def test_every_window_lies_on_the_canvas_and_covers_its_box():
     """A window is swept without asking whether a pixel is off canvas, so it has to fit.
 
-    :func:`ngsplot.raster._flat_windows` trades the tile of :func:`_stack_tiles` for a window
-    sized to each primitive's own box, which is what lets a ribbon of a pixel be swept over a
-    pixel.  Two things follow from the box being clipped to the canvas and the window being
+    :func:`ngsplot.raster._windows` sweeps each primitive over a window sized to its own box,
+    which is what lets a ribbon of a pixel be swept over a pixel.  Two things follow from the box being clipped to the canvas and the window being
     rounded up outwards: the window of a box against the edge hangs past it, and a box wider
     than one window is handed out as several.  The first is answered by pulling the last
     window back to the edge -- which makes two windows of one box overlap, and asks that the
@@ -503,7 +502,7 @@ def test_every_window_lies_on_the_canvas_and_covers_its_box():
                 & (cols[None, None, :] >= j0[:, None, None])
                 & (cols[None, None, :] < j1[:, None, None]))
         handed = np.zeros(i0.size, dtype=bool)
-        for h, wd, window_r, window_c, prims in raster._flat_windows(canvas, i0, i1, j0, j1):
+        for h, wd, window_r, window_c, prims in raster._windows(canvas, i0, i1, j0, j1):
             assert 1 <= h <= min(raster._STACK_WINDOW, canvas.height)
             assert 1 <= wd <= min(raster._STACK_WINDOW, canvas.width)
             assert window_r.min() >= 0 and window_c.min() >= 0

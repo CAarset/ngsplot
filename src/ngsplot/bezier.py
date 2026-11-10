@@ -97,7 +97,18 @@ def bernstein(order, u, v):
 
 
 def _weighted(basis, field):
-    return np.sum(basis[..., :, None] * np.asarray(field), axis=-2)
+    """``sum_k basis[..., k] * field[..., k, :]``, a term at a time.
+
+    The bits are those of ``np.sum`` over the products, which starts from its identity, +0.0,
+    and adds the terms to it in order -- the start is what gives a sum of zeros its sign.  What
+    is spared is the array of every product at once, ten times the lattice for a cubic patch.
+    """
+    field = np.asarray(field)
+    total = basis[..., 0, None] * field[..., 0, :]
+    total += 0.0
+    for k in range(1, basis.shape[-1]):
+        total += basis[..., k, None] * field[..., k, :]
+    return total
 
 
 def _difference(order, u, v, field, direction):
@@ -113,7 +124,11 @@ def _difference(order, u, v, field, direction):
             terms.append(basis[..., j, None] * (field[..., index[(a, b)], :] - p10))
         else:
             terms.append(basis[..., j, None] * (field[..., index[(a, b + 1)], :] - p10))
-    return np.sum(terms, axis=0)
+    # np.sum's own start and order, as _weighted has them, without stacking the terms first
+    total = 0.0 + terms[0]
+    for term in terms[1:]:
+        total += term
+    return total
 
 
 def lattice(n):

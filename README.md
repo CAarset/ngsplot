@@ -30,6 +30,8 @@ Plot(gfu, line_width=1, edges=False)            # the lines, thinner or gone
 Plot(gfu, elev=30, azim=-60)                    # the view, in matplotlib's own three words
 Plot(gfu, deformation=0.7)                      # the deformation slider, by amount
 Plot(gfc, eval="imag")                          # which part of a complex value to colour
+Plot(gfu, fit="box", width=600, height=None)    # a long domain fills a canvas of its shape
+Plot(gfu, colorbar={"orientation": "horizontal", "label": "u"})   # the bar, in its own words
 pyplot.savefig("frame.png")
 ```
 
@@ -39,7 +41,9 @@ figure, so everything matplotlib does from there still works: `Plot(gfu, ax=ax)`
 `close()`, and a savefig at the figure's own dpi that reproduces the rendered array byte for
 byte, which is what makes a loop of frames an animation. A colourbar is measured against the
 picture it keys and stands through a repaint, so a panel that redraws every frame keeps the width
-it was given.
+it was given. It goes underneath a picture painted more than twice as wide as it is tall, and
+labels as many band edges as it has room for, always both ends. A bar on a `cax` of your own
+stays through a repaint that asks for no bar, and keys the new picture.
 
 ```python
 from matplotlib import pyplot as mpl
@@ -52,8 +56,39 @@ axes[0].set_title("u")
 
 Keywords are sorted by who reads them: the ones `ngsplot.scene.paint` and `ngsplot.camera.Camera`
 take go to the painter, the rest go to `Draw`, so `order`, `draw_vol` and `settings` keep their
-meaning. A payload built earlier by `ngsplot._ngsolve.render_data` may be plotted
-directly, and refuses the keywords that would have shaped it instead of ignoring them.
+meaning. A payload built earlier by `ngsplot.render_data` may be plotted directly, and refuses the
+keywords that would have shaped it instead of ignoring them.
+
+`Draw` frames the bounding sphere of the mesh, so a long domain is a strip across the middle of
+the canvas: a 6 x 1.2 pipe fills 326 x 68 px of 480 x 360. `fit="box"` frames the box of the
+picture instead, with the same margin (`camera.FILL`, 92% of the tighter side), and a side given
+as `None` is sized to that box, so `width=400, height=None` gives the pipe a 400 x 107 canvas. A
+picture seen at a slant is framed only as close as the page's own framing ever brings a point to
+the camera, so a long mesh tilted towards you stays smaller than its box would allow. `Draw`'s
+`center` and `radius` still frame by hand: the camera puts `0.458 * height / radius` pixels on a
+unit of length in the plane through `center`, facing it.
+
+`ngsplot.frame(payload, ...)` takes the same `fit`, `width`, `height` and point of view and paints
+nothing: it returns the camera, whose `width` and `height` are the canvas a box fit makes, so a
+figure can be laid out for the picture before it is painted. `Plot(payload, view=view)` then paints
+with that camera, on that canvas, without fitting again — which a time loop over one mesh does
+once rather than every frame (as long as no deformation moves the mesh between frames).
+
+A live view of a running computation builds the payloads where the fields live and paints them
+where it likes. `render_data` builds no widget, so it costs no comm and no widget state in a
+notebook and may run on any thread; painting needs only numpy and matplotlib:
+
+```python
+import ngsplot
+from ngsplot import pyplot
+
+payload = ngsplot.render_data(gfu)              # cheap: no widget, no browser
+view = ngsplot.frame(payload, fit="box", width=400, height=None)   # once: lay the figure out
+image = pyplot.Plot(payload, ax=ax, view=view, colorbar=True)      # every frame
+```
+
+A panel of a 1532-element P3 field on a 400 x 107 canvas paints in about 0.14 s of CPU time with
+the view framed once (0.16 s fitting it each time), surface and lines together.
 
 A point of view is `elev`, `azim` and `roll`, in degrees: the three words of
 `Axes3D.view_init`, on a camera that stays where the page put it. Left out, they are the view the
@@ -65,11 +100,12 @@ knob.
 
 [examples/ngsplot.ipynb](examples/ngsplot.ipynb) runs all of it against a 1D, a 2D and a 3D
 finite element space: the flat line of a function on a mesh of dimension 1 and the same curve as a
-circle in three dimensions, the surface case with its colourbar, the knobs side by side, a
-`CoefficientFunction` on a named mesh, a vector and a complex field, `L2(order=0)`, a
-`NumberSpace`, a solid seen from three angles, and a time loop that animates in the notebook
-itself -- an `animation.FuncAnimation` over `Plot` calls, shown with `to_jshtml`, no frames on
-disk. It executes end to end; only the meshes need ngsolve.
+circle in three dimensions, the surface case with its colourbar, the knobs side by side, eight
+colour maps on one oscillating field, a `CoefficientFunction` on a named mesh, a vector and a
+complex field, `L2(order=0)`, a `NumberSpace`, a long channel framed by its box, a solid seen from
+three angles, and a time loop that animates in the notebook itself -- an
+`animation.FuncAnimation` over `Plot` calls, shown with `to_jshtml`, no frames on disk. It executes
+end to end; only the meshes need ngsolve.
 
 ## Status
 

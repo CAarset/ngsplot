@@ -452,3 +452,73 @@ def test_a_tilt_makes_a_flat_mesh_reach_towards_the_camera():
     assert np.allclose(depths(flat, corners), depths(flat, corners)[0], atol=1e-12)
     tilted = camera.Camera(centre, radius, width=894, height=594, elev=30)
     assert depths(tilted, corners).max() - depths(tilted, corners).min() > 0.1
+
+
+# ------------------------------------------------------------------------ framing a box
+
+def rectangle(length=6.0, width=1.2, n=25):
+    """The outline of a flat ``length`` by ``width`` rectangle, centred off the origin."""
+    t = np.linspace(0.0, 1.0, n)
+    xs, ys = 1.0 + length * t, -2.0 + width * t
+    edge = np.concatenate([np.c_[xs, np.full(n, ys[0])], np.c_[xs, np.full(n, ys[-1])],
+                           np.c_[np.full(n, xs[0]), ys], np.c_[np.full(n, xs[-1]), ys]])
+    return np.c_[edge, np.zeros(len(edge))]
+
+
+def sphere_view(points, **kwargs):
+    """The page's own framing of ``points``: their bounding sphere, as BuildRenderData has it."""
+    low, high = points.min(axis=0), points.max(axis=0)
+    return camera.Camera((low + high) / 2, np.linalg.norm(high - low) / 2, **kwargs)
+
+
+def test_the_page_gives_a_sphere_the_share_of_the_height_a_box_is_given():
+    """``FILL`` is what the page's framing leaves of a bounding sphere: its diameter, seen face
+    on, is that share of the canvas height, whatever the canvas."""
+    for width, height in ((900, 600), (480, 360), (300, 700)):
+        view = camera.Camera([0.0, 0.0, 0.0], 1.0, width=width, height=height)
+        _, y_top, _, _ = view.project([[0.0, 1.0, 0.0]])[0]
+        _, y_bottom, _, _ = view.project([[0.0, -1.0, 0.0]])[0]
+        assert (y_bottom - y_top) / height == pytest.approx(camera.FILL)
+    assert camera.FILL == pytest.approx(1.0 / (3.0 * np.tan(np.radians(20.0))))
+
+
+@pytest.mark.parametrize("width,height", [(480, 360), (400, 107), (300, 600)])
+def test_a_flat_box_seen_face_on_fills_its_canvas_on_the_tighter_side(width, height):
+    points = rectangle()
+    view = sphere_view(points, width=width, height=height).fit(points)
+    (x0, x1, y0, y1), _ = view.box(points)
+    assert max((x1 - x0) / width, (y1 - y0) / height) == pytest.approx(camera.FILL, rel=1e-3)
+    assert ((x0 + x1) / 2, (y0 + y1) / 2) == pytest.approx((width / 2, height / 2), abs=0.05)
+
+
+def test_a_box_is_framed_with_the_turns_it_was_asked_for():
+    """Framing moves the centre and scales the radius, the two numbers a page frames with,
+    and leaves every turn where it was: the view is the view asked for, only nearer."""
+    points = rectangle()
+    asked = sphere_view(points, width=480, height=360, roll=30.0)
+    view = asked.fit(points)
+    turn = lambda v: v.model_view[:3, :3] * v.mesh_radius  # noqa: E731
+    np.testing.assert_allclose(turn(view), turn(asked), atol=1e-12)
+    (x0, x1, y0, y1), _ = view.box(points)
+    assert max((x1 - x0) / 480, (y1 - y0) / 360) == pytest.approx(camera.FILL, rel=1e-3)
+
+
+def test_a_long_box_at_a_slant_comes_no_nearer_than_the_page_puts_anything():
+    """Seen at a slant, a pipe zoomed to fill the canvas would bring its near end up to the
+    camera.  The page's own framing keeps every point behind the front of the unit sphere,
+    and so does a box: the picture is centred and as large as that allows, and no larger."""
+    points = rectangle()
+    view = sphere_view(points, width=480, height=360, elev=30.0, azim=-60.0).fit(points)
+    (x0, x1, y0, y1), distance = view.box(points)
+    nearest = view.project(points)[:, 3].min()
+    assert nearest >= 2.0 - 1e-9
+    assert ((x0 + x1) / 2, (y0 + y1) / 2) == pytest.approx((240.0, 180.0), abs=0.5)
+    assert max((x1 - x0) / 480, (y1 - y0) / 360) <= camera.FILL * (1 + 1e-3)
+
+
+def test_a_cube_at_a_slant_is_framed_by_its_box():
+    corners = np.array([[x, y, z] for x in (0, 1) for y in (0, 1) for z in (0, 1)], float)
+    view = sphere_view(corners, width=600, height=600, elev=30.0, azim=-60.0).fit(corners)
+    (x0, x1, y0, y1), _ = view.box(corners)
+    assert max(x1 - x0, y1 - y0) / 600 == pytest.approx(camera.FILL, rel=1e-3)
+    assert ((x0 + x1) / 2, (y0 + y1) / 2) == pytest.approx((300.0, 300.0), abs=0.5)

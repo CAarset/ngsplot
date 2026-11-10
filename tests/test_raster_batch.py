@@ -6,12 +6,12 @@ tie.  That is worth keeping as the definition, but it does not scale -- the inte
 runs its inner arithmetic once per triangle, so a 942-element mesh at 900 by 600 costs
 17 seconds of it.  ``_paint_stack`` is the same rasterizer with the loop lifted out: it
 takes the whole stack of a pass at once, in window space, and spends its numpy calls on
-screen tiles instead of on primitives.  Lifting the loop out is only allowed where it
+windows of one shape instead of on primitives.  Lifting the loop out is only allowed where it
 cannot change a pixel, so these tests hold the batched sweep against the per-primitive one
 on the cases where the two could disagree:
 
 * two primitives reaching the same sample with the same depth, where the order of the
-  writes decides the colour and the order of the *tiles* must not;
+  writes decides the colour and the order of the *windows* and of the batches must not;
 * primitives that leave the canvas, whose bounding box is clipped by its edge;
 * degenerate and non-finite primitives, which are culled rather than painted;
 * the varyings, which belong to the triangle that won the sample and to no other.
@@ -21,7 +21,7 @@ import numpy as np
 import pytest
 
 from ngsplot import raster
-from ngsplot.raster import _STACK_TILE_MAX
+from ngsplot.raster import _STACK_WINDOW
 
 WIDTH, HEIGHT = 64, 48
 
@@ -252,14 +252,14 @@ def test_a_triangle_behind_the_camera_is_the_caller_to_cull(weight):
     np.testing.assert_array_equal(batch.depths, reference.depths)
 
 
-def test_a_triangle_over_more_than_a_tile_of_its_own_size_spans_the_tiles():
-    """A triangle far bigger than the widest tile the stack will use, so that it is listed
-    in several tiles: a sample in any one of them is won by it alone, and the picture is
+def test_a_triangle_over_more_than_a_window_is_swept_as_several():
+    """A triangle far bigger than the widest window the stack will use, so that it is handed
+    out as several windows: a sample in any one of them is won by it alone, and the picture is
     that of the per-primitive sweep.  The canvas is a strip whose box crosses the cap of
-    :data:`_STACK_TILE_MAX` several times over, and wide enough that the corners of the
-    strip are outside the triangle, whatever the cap is made."""
-    width, height = 4 * _STACK_TILE_MAX + 7, 60
-    assert width > 3 * _STACK_TILE_MAX
+    :data:`_STACK_WINDOW` several times over, and wide enough that the corners of the strip are
+    outside the triangle, whatever the cap is made."""
+    width, height = 4 * _STACK_WINDOW + 7, 60
+    assert width > 3 * _STACK_WINDOW
     x = np.array([[width / 4.0, 3.0 * width / 4.0, width / 2.0]])
     y = np.array([[-8.0, -8.0, height + 8.0]])
     w = np.ones((1, 3))
@@ -277,48 +277,27 @@ def test_a_triangle_over_more_than_a_tile_of_its_own_size_spans_the_tiles():
     assert not won[:, 0, 0].any()
 
 
-def test_every_box_is_offered_to_every_tile_of_its_own_size_class():
-    """The binning is the only place that decides where a primitive is swept, and nothing
-    below it can notice a tile it was never offered.
+@pytest.mark.parametrize("less_equal", [True, False])
+def test_a_tie_is_settled_by_the_stack_and_not_by_the_batch_it_was_found_in(
+        monkeypatch, less_equal):
+    """The sweep finds its candidates a window shape at a time and settles them a batch at a
+    time, and neither order is the order of the draw.  A tie is therefore settled by the place
+    in the stack of the primitive holding the sample, which only the per-primitive painter
+    knows for free: here every chunk of the sweep is one primitive and every batch is settled
+    on its own, so a tie between two primitives always meets a sample the other one already
+    holds -- in whichever of the two orders their windows came in."""
+    monkeypatch.setattr(raster, "_STACK_WINNERS", 1)
+    monkeypatch.setattr(raster, "_STACK_SAMPLES", 1)
+    rng = np.random.default_rng(5)
+    x, y, w, z, rgb = soup(rng, 40, ties=12, culls=3)
+    # the copies are made from the stack's first rows, and the window shapes come out sorted
+    # by size, so some of a pair are swept before and some after the row they copy
+    batch = raster.Canvas(WIDTH, HEIGHT)
+    raster._paint_stack(batch, x, y, w, z, rgb=rgb, less_equal=less_equal)
+    reference = reference_flat(canvas_for(), x, y, w, z, rgb, less_equal=less_equal)
 
-    So what it promises is checked on its own terms: the side of a tile is the power of two
-    the box fits into, kept between the floor and the cap, which is what holds a primitive
-    to two tiles per axis; and a primitive is listed once in every tile its box touches, in
-    stack order, and in no tile it does not.  A soup of random triangles only happens to
-    straddle a tile edge, which is how a missed tile hid before.
-    """
-    rng = np.random.default_rng(23)
-    canvas = canvas_for()
-    lo, hi = raster._STACK_TILE_MIN, raster._STACK_TILE_MAX
-
-    def side(box):
-        assert box > 0
-        return min(max(1 << (box - 1).bit_length(), lo), hi)
-
-    for _ in range(30):
-        count = int(rng.integers(1, 7))
-        i0 = rng.integers(0, canvas.height, count)
-        j0 = rng.integers(0, canvas.width, count)
-        i1 = np.minimum(i0 + rng.integers(1, 60, count), canvas.height)
-        j1 = np.minimum(j0 + rng.integers(1, 60, count), canvas.width)
-        boxes = [int(max(i1[p] - i0[p], j1[p] - j0[p])) for p in range(count)]
-        want = []
-        for p in range(count):
-            s = side(boxes[p])
-            for r in range(int(i0[p]) // s, (int(i1[p]) - 1) // s + 1):
-                for c in range(int(j0[p]) // s, (int(j1[p]) - 1) // s + 1):
-                    want.append((p, r, c))
-
-        got = []
-        for (ra, rb), (ca, cb), prims in raster._stack_tiles(canvas, i0, i1, j0, j1):
-            assert 0 <= ra < rb <= canvas.height and 0 <= ca < cb <= canvas.width
-            assert np.all(np.diff(prims) > 0), "a tile's primitives are not in stack order"
-            for p in prims:
-                s = side(boxes[int(p)])
-                assert (ra % s, ca % s) == (0, 0), "a tile does not start on its own grid"
-                assert rb - ra <= s and cb - ca <= s, "a tile is wider than its size class"
-                got.append((int(p), ra // s, ca // s))
-        assert sorted(got) == sorted(want), "the tiles a box touches are not the tiles it got"
+    np.testing.assert_array_equal(batch.planes, reference.planes)
+    np.testing.assert_array_equal(batch.depths, reference.depths)
 
 
 # ---------------------------------------------------------------------------- the varyings
@@ -393,7 +372,7 @@ def test_a_stack_shades_the_varyings_of_the_triangle_that_won(samples, less_equa
     """Every pixel of a shaded stack belongs to one triangle, and its colour comes from that
     triangle's own varyings and its own facing: not from the nearer triangle that lost the
     depth test, and not from a neighbouring triangle whose varyings would have bled in had
-    the shading been done over the tile instead of over the winners."""
+    the shading been done over the window instead of over the winners."""
     rng = np.random.default_rng(11)
     x, y, w, z, _ = soup(rng, 30, ties=4, culls=3)
     count = x.shape[0]

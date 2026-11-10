@@ -24,7 +24,13 @@ DARK_BACKSIDE = True
 def normalize(v, axis=-1):
     """Unit vectors, mapping a zero vector to zero instead of NaN."""
     v = np.asarray(v, dtype=np.float64)
-    n = np.linalg.norm(v, axis=axis, keepdims=True)
+    if v.ndim and axis in (-1, v.ndim - 1) and v.shape[-1] == 3:
+        # the length of a 3-vector summed in the order np.linalg.norm sums it, for the same
+        # bits without numpy's reduction along an axis of three, which it pays for per vector
+        x, y, z = v[..., 0], v[..., 1], v[..., 2]
+        n = np.sqrt(x * x + y * y + z * z)[..., None]
+    else:
+        n = np.linalg.norm(v, axis=axis, keepdims=True)
     return np.divide(v, n, out=np.zeros_like(v), where=n > 0)
 
 
@@ -51,7 +57,9 @@ def shade(color, normal, position, *, inside=False, dark_backside=DARK_BACKSIDE,
     v = normalize(-p)
     dot_ns = _dot(n, s)
     sn = np.clip(dot_ns, 0.0, None)
-    r = -s + 2.0 * dot_ns[:, None] * n
+    # -s + 2 (n.s) n, with the sum turned round and taken in place: the same roundings
+    r = 2.0 * dot_ns[:, None] * n
+    r -= s
     diffuse = diffuse_coeff * sn
     spec = np.clip(_dot(r, v), 0.0, None) ** shininess
     # `if (diffuse == 0.0 || light_shininess == 0.0) spec = 0.0;` — a surface turned away
@@ -65,5 +73,8 @@ def shade(color, normal, position, *, inside=False, dark_backside=DARK_BACKSIDE,
     )
     dimm = np.where(inside & dark_backside, 0.5, 1.0)
 
-    return dimm[:, None] * (color * (ambient + diffuse[:, None])
-                            + spec[:, None] * spec_coeff)
+    # dimm * (color * (ambient + diffuse) + spec * spec_coeff), a product at a time in place
+    out = color * (ambient + diffuse[:, None])
+    out += spec[:, None] * spec_coeff
+    out *= dimm[:, None]
+    return out
