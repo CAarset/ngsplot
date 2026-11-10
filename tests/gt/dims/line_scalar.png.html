@@ -1,0 +1,34 @@
+
+<!DOCTYPE html>
+<html>
+    <head>
+        <title>NGSolve WebGUI</title>
+        <meta name='viewport' content='width=device-width, user-scalable=no'/>
+        <style>
+            body{
+                margin:0;
+                overflow:hidden;
+            }
+            canvas{
+                cursor:grab;
+                cursor:-webkit-grab;
+                cursor:-moz-grab;
+            }
+            canvas:active{
+                cursor:grabbing;
+                cursor:-webkit-grabbing;
+                cursor:-moz-grabbing;
+            }
+        </style>
+    </head>
+    <body>
+          <script src="https://cdn.jsdelivr.net/npm/webgui@0.2.39/dist/webgui.js"></script>
+          </script>
+          <script>
+            var render_data = {"gui_settings": {}, "ngsolve_version": "6.2.2608", "mesh_dim": 1, "order2d": 2, "order3d": 2, "draw_vol": false, "draw_surf": true, "objects": [], "deformation": false, "funcdim": 1, "show_wireframe": true, "show_mesh": true, "Bezier_points": ["", "", ""], "edges": ["AACAPgAAAAAAAAAAAAAAAAAAAD8AAAAAAAAAAAAAAAAAAEA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAA==", "AAAAPgAAAAAAAAAAAAAAAAAAwD4AAAAAAAAAAAAAAAAAACA/AAAAAAAAAAAAAAAAAABgPwAAAAAAAAAAAAAAAA==", "AAAAAAAAAAAAAAAAAAAAAAAAgD4AAAAAAAAAAAAAAAAAAAA/AAAAAAAAAAAAAAAAAABAPwAAAAAAAAAAAAAAAA=="], "Bezier_trig_points": ["", "", "", "", "", ""], "mesh_center": [0.5, 1.1125369292536007e-308, 1.1125369292536007e-308], "mesh_radius": 0.5, "funcmin": 1.7976931348623157e+308, "funcmax": 2.2250738585072014e-308, "multidim_interpolate": false, "multidim_animate": false, "deformation_scale": 1.0, "autoscale": true, "fullscreen": false}
+
+            const scene = new webgui.Scene();
+            scene.init(document.body, render_data, {preserveDrawingBuffer: true});
+          </script>
+    </body>
+</html>
