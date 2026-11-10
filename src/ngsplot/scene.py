@@ -1,11 +1,13 @@
 """The knobs: render data in, picture out, defaults exactly as the webgui has them.
 
 Everything the live viewer keeps in its control panel -- the colour range, the number
-of bands, the wireframe and its width, the subdivision of every curve -- is a keyword
-here, and every keyword that is left out takes the value ``three/gui.ts`` gives the
-panel on a fresh draw.  A payload straight from ``ngsolve.webgui`` therefore paints
-the picture ``ngsolve.webgui`` would have painted, ``Draw`` included in the payload
-its own ``gui_settings``.  See docs/SPEC.md, "Colour", and docs/DIMS.md.
+of bands, which of the three kinds of geometry is drawn at all and how thick its lines
+are, the subdivision of every curve -- is a keyword here, and every keyword that is left
+out takes the value ``three/gui.ts`` gives the panel on a fresh draw.  A payload straight
+from ``ngsolve.webgui`` therefore paints the picture ``ngsolve.webgui`` would have
+painted, ``Draw`` included in the payload its own ``gui_settings``, be it in the sections
+a panel snapshot has or in the flat names ``Draw`` itself writes.
+See docs/SPEC.md, "Colour", and docs/DIMS.md.
 
 The knobs deliberately mirror matplotlib's names: ``vmin``/``vmax`` switch off the
 autoscaled range as passing them does to ``imshow``, ``cmap`` takes any matplotlib
@@ -26,9 +28,23 @@ DEFAULTS = {
     "subdivision": 5,           # Misc.subdivision
     "fast_draw": False,         # Misc.fast_draw
     "dark_backside": True,      # the shader's dark_backside uniform
+    "surface": True,            # Objects.Surface
     "wireframe": True,          # Objects.Wireframe
     "edges": True,              # Objects.Edges
     "vectors": False,           # Vectors.show
+}
+
+#: ``gui.ts:151-165``: a payload may name a setting flat, at the top of ``gui_settings``.
+_FLAT_NAMES = {
+    "autoscale": ("Colormap", "autoscale"),
+    "colormap_min": ("Colormap", "min"),
+    "colormap_max": ("Colormap", "max"),
+    "colormap_ncolors": ("Colormap", "ncolors"),
+    "subdivision": ("Misc", "subdivision"),
+    "line_thickness": ("Misc", "line_thickness"),
+    "edges": ("Objects", "Edges"),
+    "mesh": ("Objects", "Wireframe"),
+    "elements": ("Objects", "Surface"),
 }
 
 
@@ -36,6 +52,24 @@ def _section(settings, name):
     """One section of a payload's ``gui_settings``, which may be absent or null."""
     section = settings.get(name) or {}
     return section if isinstance(section, dict) else {}
+
+
+def _sections_of(settings):
+    """The three sections a payload's settings resolve to, flat names folded in.
+
+    A payload either names a setting inside its section -- the shape a panel snapshot has,
+    and the only one a live panel can produce -- or flat, which is what ``Draw`` writes
+    into ``settings=``.  The flat name wins, because the page folds it in afterwards
+    (``gui.ts:146-175``), and ``Misc.reduce_subdivision`` is the former name of the
+    ``fast_draw`` checkbox.
+    """
+    folded = {name: dict(_section(settings, name)) for name in ("Colormap", "Misc", "Objects")}
+    for flat, (section, name) in _FLAT_NAMES.items():
+        if settings.get(flat) is not None:
+            folded[section][name] = settings[flat]
+    if folded["Misc"].get("reduce_subdivision") is not None:
+        folded["Misc"]["fast_draw"] = folded["Misc"]["reduce_subdivision"]
+    return folded
 
 
 def settings_of(render_data, *, is_complex=None):
@@ -47,17 +81,17 @@ def settings_of(render_data, *, is_complex=None):
     taken from the payload; the keyword is for a pair that arrived without one -- a complex
     coefficient function assembled by hand, say -- and for overruling a payload that has it.
 
-    A payload records the panel in ``gui_settings``, in the same sections the lil-gui
-    status object has (``Colormap``, ``Misc``, ``Objects``, ``camera``), and leaves out
-    whatever was left at its default.  Two settings are not panel values at all but
-    follow from the payload: the subdivision drops to 1 when no element is curved
+    A payload records the panel in ``gui_settings``, either in the sections the lil-gui
+    status object has (``Colormap``, ``Misc``, ``Objects``, ``camera``) or by the flat
+    names ``Draw`` writes, and leaves out whatever was left at its default.  Two settings
+    are not panel values at all but follow from the payload: the subdivision drops to 1
+    when no element is curved
     (``gui.ts:229-231``) and the deformation defaults to ``deformation_scale`` when the
     payload says the geometry was sent flat (``gui.ts:582-587``).
     """
     settings = render_data.get("gui_settings") or {}
-    colormap_section = _section(settings, "Colormap")
-    misc = _section(settings, "Misc")
-    objects = _section(settings, "Objects")
+    colormap_section, misc, objects = (_sections_of(settings)[name]
+                                       for name in ("Colormap", "Misc", "Objects"))
 
     out = dict(DEFAULTS)
     out["ncolors"] = int(colormap_section.get("ncolors", out["ncolors"]))
@@ -66,14 +100,22 @@ def settings_of(render_data, *, is_complex=None):
     out["subdivision"] = int(misc.get("subdivision", out["subdivision"]))
     out["fast_draw"] = bool(misc.get("fast_draw", out["fast_draw"]))
     out["dark_backside"] = bool(misc.get("dark_backside", out["dark_backside"]))
+    out["surface"] = bool(objects.get("Surface", out["surface"]))
     out["wireframe"] = bool(objects.get("Wireframe", out["wireframe"]))
     out["edges"] = bool(objects.get("Edges", out["edges"]))
     out["vectors"] = bool(objects.get("Vectors", out["vectors"]))
 
+    # Nothing curved to subdivide, and the page asks for one segment -- but into the
+    # defaults, before the payload's settings (gui.ts:229-231), so a payload that named a
+    # subdivision of its own keeps it.  fast_draw shortens it the other way, always.
     order = max(int(render_data.get("order2d", 1)), int(render_data.get("order3d", 1)))
-    if order <= 1 or out["fast_draw"]:
+    if out["fast_draw"] or (order <= 1 and "subdivision" not in misc):
         out["subdivision"] = 1
 
+    # ``Draw(autoscale=False)`` writes a flag of its own at the top of the payload
+    # (``netgen/webgui.py:548``), and that, not the panel's checkbox alone, is what lets the
+    # panel re-read the ends of the function on a render (``scene.ts:497``).
+    out["autoscale"] = out["autoscale"] and bool(render_data.get("autoscale", True))
     scale = float(render_data.get("deformation_scale") or 1.0)
     out["deformation"] = scale if render_data.get("deformation") else 0.0
 
@@ -113,9 +155,9 @@ def view_range(render_data, vmin=None, vmax=None, autoscale=None, function_mode=
     the renderer paints it as one flat colour, so this does too.
     """
     settings = render_data.get("gui_settings") or {}
-    panel = _section(settings, "Colormap")
+    panel = _sections_of(settings)["Colormap"]
     if autoscale is None:
-        autoscale = bool(panel.get("autoscale", True))
+        autoscale = bool(panel.get("autoscale", True)) and bool(render_data.get("autoscale", True))
 
     vmin_panel, vmax_panel = panel.get("min"), panel.get("max")
     if vmin_panel is not None and vmax_panel is not None:
@@ -181,7 +223,7 @@ def colormap_of(cmap=None, ncolors=colormap.NCOLORS, mesh_only=False):
 
 def paint(render_data, *, width, height, view=None, canvas=None,
           vmin=None, vmax=None, autoscale=None, cmap=None, ncolors=None,
-          n_segments=None, line_width=None, wireframe=None, edges=None,
+          n_segments=None, line_width=None, surface=None, wireframe=None, edges=None,
           function_mode=None, complex_scale=None, dark_backside=None,
           deformation=None, is_complex=None, **camera_kwargs):
     """Draw ``render_data`` into a :class:`ngsplot.raster.Canvas` and return it.
@@ -197,10 +239,11 @@ def paint(render_data, *, width, height, view=None, canvas=None,
     :func:`settings_of`): the colours come from ``colormap_of()``, the range from
     :func:`view_range`, and the boundary carries ``line_width`` gui pixels of ink,
     which is half that many device pixels at any canvas height
-    (``three/scene.ts:776``).  ``wireframe=False`` and ``edges=False`` hide the two
-    kinds of line, ``ncolors`` and ``cmap`` change the bands, and ``deformation`` is
-    the amount the geometry is pushed along the value, which a payload that says it
-    sent flat geometry needs lifted for the lines as much as for the surface.
+    (``three/scene.ts:776``).  ``surface=False``, ``wireframe=False`` and ``edges=False``
+    hide the three kinds of geometry the Objects folder holds, ``ncolors`` and ``cmap``
+    change the bands, and ``deformation`` is the amount the geometry is pushed along the
+    value, which a payload that says it sent flat geometry needs lifted for the lines as
+    much as for the surface.
 
     ``is_complex`` is taken from the payload, which says so when the function it came from
     was complex; pass it to draw a real/imaginary pair as one complex value, or to ask for
@@ -231,18 +274,21 @@ def paint(render_data, *, width, height, view=None, canvas=None,
                                   settings["is_complex"]) if lift else "none"
 
     flat = float(lift) if render_data.get("deformation") is True else 0.0
-    ctrl, vectors = geometry.trig_points(render_data)
-    raster.paint_surface(
-        canvas, view, order, ctrl,
-        vmin=low, vmax=high, pal=pal, n_segments=n,
-        vectors=vectors,
-        deformation=lift, mode=mode,
-        function_mode=function_mode,
-        complex_scale=settings["complex_scale"] if complex_scale is None else complex_scale,
-        dark_backside=settings["dark_backside"] if dark_backside is None else bool(dark_backside),
-        # a plain Draw reaches the page with draw_surf null, and only an explicit false
-        # is NO_FUNCTION_VALUES
-        function_values=render_data.get("draw_surf") is not False)
+    if surface is None:
+        surface = settings["surface"]
+    if surface:
+        ctrl, vectors = geometry.trig_points(render_data)
+        raster.paint_surface(
+            canvas, view, order, ctrl,
+            vmin=low, vmax=high, pal=pal, n_segments=n,
+            vectors=vectors,
+            deformation=lift, mode=mode,
+            function_mode=function_mode,
+            complex_scale=settings["complex_scale"] if complex_scale is None else complex_scale,
+            dark_backside=settings["dark_backside"] if dark_backside is None else bool(dark_backside),
+            # a plain Draw reaches the page with draw_surf null, and only an explicit false
+            # is NO_FUNCTION_VALUES
+            function_values=render_data.get("draw_surf") is not False)
 
     if wireframe is None:
         wireframe = settings["wireframe"]
