@@ -279,7 +279,16 @@ class Camera:
         """The canvas aspect, which is what the renderer feeds to both cameras."""
         return self.width / self.height
 
+    @property
+    def model_view(self):
+        """``modelViewMatrix`` of the shaders: the object matrix as the camera sees it."""
+        return self.view @ self.object
+
     def project(self, points):
-        """Mesh points as ``(x, y, depth, w)``: pixels from the top left of the canvas."""
-        return to_pixels(clip_points(points, self.model_view_projection), self.width,
-                         self.height)
+        """Mesh points as ``(n, 4)``: pixel ``x``, pixel ``y`` from the top, depth, ``w``.
+
+        Rows with ``w <= 0`` sit behind the camera and must not be drawn; see
+        :func:`to_pixels` for what the four columns mean.
+        """
+        return np.stack(to_pixels(clip_points(points, self.model_view_projection),
+                                  self.width, self.height), axis=-1)

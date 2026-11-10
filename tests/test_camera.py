@@ -20,7 +20,7 @@ import pytest
 
 from ngsplot import camera
 
-GT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "gt")
+from gtdata import GT, render_data_of, settings_of
 
 # the mesh of the ground-truth square: centre and radius as BuildRenderData reports them
 CENTER = [0.5, 0.5, 1.1125369292536007e-308]
@@ -42,21 +42,6 @@ def scenes():
 @pytest.fixture(scope="module")
 def eulers():
     return _json("euler_orders.json")
-
-
-def render_data_of(scene_name):
-    """The render data of a ground-truth scene, read back from its own page."""
-    import re
-
-    with open(os.path.join(GT, f"{scene_name}.png.html")) as f:
-        text = f.read()
-    blob = re.search(r"var render_data = (\{[^\n]*\})\n", text).group(1)
-    return json.loads(blob)
-
-
-def settings_of(scene_name):
-    """``gui_settings`` of a ground-truth scene, as the renderer would have seen them."""
-    return render_data_of(scene_name).get("gui_settings", {})
 
 
 def as_matrix(elements):
@@ -348,6 +333,17 @@ def test_a_scene_without_camera_settings_just_centers_and_scales():
     cam = camera.Camera.from_render_data(data, width=894, height=594)
     np.testing.assert_allclose(cam.object, camera.matrix_from_three(probe["controls_mat"]),
                                atol=1e-15)
+
+
+def test_model_view_is_the_object_matrix_as_the_camera_sees_it(scenes):
+    probe = scenes["square_rotated"]
+    cam = camera.Camera.from_render_data(render_data_of("square_rotated"), width=894,
+                                         height=594)
+    np.testing.assert_allclose(cam.model_view, cam.view @ cam.object, atol=0)
+    # and the two matrices the renderer itself held, multiplied out
+    world = camera.matrix_from_three(probe["controls_mat"])
+    view = camera.matrix_from_three(probe["camera"]["view"])
+    np.testing.assert_allclose(cam.model_view, view @ world, atol=1e-12)
 
 
 @pytest.mark.parametrize("order", ["XY", "XXY", "WXY", "XYXZ"])
