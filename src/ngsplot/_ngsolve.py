@@ -19,6 +19,10 @@ positionally and the handler raises ``Cannot draw CoefficientFunction without me
 a value to colour is spelled ``eval_`` where it is looked up and ``eval`` where it is read
 (``netgen/webgui.py:564-573``), so neither spelling arrives anywhere; ngsplot asks the renderer
 directly, with ``function_mode``.
+
+One thing ``Draw`` does leave to the caller is the widget it built to make the payload:
+``show=False`` keeps that widget off the page but does not undo its construction.
+``render_data`` closes it once the payload is read, and the reason is told there.
 """
 
 __all__ = ["render_data"]
@@ -33,10 +37,27 @@ def render_data(obj, *args, **kwargs):
     them, so ``scene.settings_of`` and ``scene.view_range`` say of the result what the live
     viewer would have done with it.  ``show`` and ``filename`` are not among them: this draws
     nothing but a picture somewhere else.
+
+    The widget comes back out of the scene and is then closed, which ``Draw`` does not do for
+    us.  ``WebGLScene.__init__`` constructs a ``WebGuiWidget`` before it looks at ``show``
+    (``netgen/webgui.py:438``), and constructing one is not free in a kernel: with ``anywidget``
+    installed it is an ``ipywidgets`` widget, so it opens a comm and files itself in the
+    module-level registry that hands state to the front end.  That registry holds a strong
+    reference, which means dropping the scene does not free the widget and its ``__del__`` --
+    which would have closed it -- never runs: a notebook accumulates one widget per call, and
+    the ``widget_state`` the kernel serialises with them.  One reported animation run reached
+    438 of them for about 23 MB, all of it for pictures that were never displayed.  So the
+    payload is read first and the widget closed after; ``close`` is absent from the stand-in
+    ``WebGuiWidget`` of a ``netgen`` without ``anywidget``, where there is no comm to close and
+    nothing to leak.
     """
     import ngsolve.webgui  # noqa: F401  registers the draw types of ngsolve's own objects
     from netgen.webgui import Draw
 
     scene = Draw(obj, *args, show=False, **kwargs)
     # the payload the widget was handed, so that the arrays are assembled once and not twice
-    return scene.widget.value
+    value = scene.widget.value
+    close = getattr(scene.widget, "close", None)
+    if close is not None:
+        close()
+    return value

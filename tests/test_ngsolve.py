@@ -12,7 +12,9 @@ where the page reads them, because they are how a script says ``vmin``, ``vmax``
 ``min``/``max`` become ``funcmin``/``funcmax``, ``autoscale=False`` becomes the flag that stops
 the renderer from re-reading the function, and the flat names inside ``settings`` are the very
 ones ``scene.settings_of`` folds into the panel.  And a bare ``CoefficientFunction`` still
-hears what ngsolve says about it: without a mesh there is nothing to draw.
+hears what ngsolve says about it: without a mesh there is nothing to draw.  And since the
+payload is built by a widget that this package has no use for once the payload is in hand, the
+file answers for that widget as well: built, read, closed.
 """
 
 import base64
@@ -214,3 +216,61 @@ def test_a_constant_field_reports_the_bounds_of_a_field_that_never_spoke():
 def test_a_coefficient_function_without_a_mesh_says_what_ngsolve_says():
     with pytest.raises(RuntimeError, match="without mesh"):
         _ngsolve.render_data(ngs.x * ngs.y)
+
+
+def test_the_widget_the_scene_built_is_closed_once_the_payload_is_read(monkeypatch):
+    """A payload costs a widget to build, and should not cost one to keep.
+
+    ``Draw`` reads ``show`` only after ``WebGLScene`` has constructed its widget, so the scene
+    arrives holding a widget whoever that widget is -- an ``anywidget`` in a kernel, the plain
+    stand-in where ``netgen`` could not import one -- and closing it is left to the caller.  The
+    seam is that caller.  A subclass that counts closes is what makes the call visible whichever
+    of the two the installed ``netgen`` builds, and the order is worth as much as the count: the
+    payload has to be in hand before the widget goes, and has to be the one the widget was
+    handed rather than a second assembly of it.
+    """
+    import netgen.webgui as netgen_webgui
+
+    seen = []
+
+    class Recording(netgen_webgui.WebGuiWidget):
+        def close(self):
+            seen.append(self.value)  # what the widget still held at the moment it was closed
+            inherited = getattr(super(), "close", None)
+            if inherited is not None:  # the stand-in of a netgen without anywidget has none
+                inherited()
+
+    monkeypatch.setattr(netgen_webgui, "WebGuiWidget", Recording)
+    mesh, gfu = scalar_2d()
+    first, second = _ngsolve.render_data(gfu), _ngsolve.render_data(gfu)
+
+    assert len(seen) == 2, "one widget closed per payload, no more and none left open"
+    assert seen[0] is first and seen[1] is second, (
+        "the payload was read out of the widget before it went, and is the very dict the widget "
+        "was handed rather than the arrays assembled a second time")
+
+
+def test_a_run_of_plots_leaves_no_widget_registered():
+    """The accumulation a notebook reports, measured where it can happen at all.
+
+    A widget is a kernel object only when ``anywidget`` was importable: it opens a comm and
+    files itself in a module-level registry that holds it for the life of the process, which is
+    why dropping the scene frees nothing and ``__del__`` never runs to close it.  The run that
+    reported this had 438 of them and some 23 MB of ``widget_state`` behind them, for scenes
+    that were never displayed.  Where ``anywidget`` is absent the widget is a stand-in with no
+    comm and nothing to count, and there is nothing here to measure.
+    """
+    pytest.importorskip("anywidget")
+    ipywidgets = pytest.importorskip("ipywidgets")
+
+    def registered():
+        widgets = getattr(ipywidgets.Widget, "_objects", None)  # ipywidgets 7 kept it here
+        if widgets is None:  # ipywidgets 8 moved it out of the class
+            from ipywidgets.widgets.widget import _instances as widgets
+        return len(widgets)
+
+    mesh, gfu = scalar_2d()
+    before = registered()
+    for _ in range(5):
+        _ngsolve.render_data(gfu)
+    assert registered() == before, "a payload per call, and a widget the kernel carries per call"
