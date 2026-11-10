@@ -235,9 +235,9 @@ def paint(render_data, *, width, height, view=None, canvas=None,
     ``width`` and ``height`` are the drawing buffer, which is the size of the page's
     canvas rather than of the element holding it (docs/OVERLAYS.md, "The overlay
     layer").  Pass ``view`` to draw with a camera built elsewhere, and any other
-    :class:`ngsplot.camera.Camera` keyword -- ``euler_angles``, ``transformations`` --
-    to tilt the default one; a payload that records a camera in ``gui_settings`` is
-    followed without being asked.
+    :class:`ngsplot.camera.Camera` keyword -- ``elev``, ``azim``, ``roll``, the page's
+    own ``euler_angles`` or ``transformations`` -- to turn the default one; a payload
+    that records a camera in ``gui_settings`` is followed without being asked.
 
     Left alone, every keyword is the setting of a fresh panel (see
     :func:`settings_of`): the colours come from ``colormap_of()``, the range from
