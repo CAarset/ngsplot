@@ -27,7 +27,7 @@ Plot(mesh=mesh)                                 # spelled either way, like Draw
 Plot(gfu, vmin=0, vmax=1, ncolors=16)           # the panel's own min, max and bands
 Plot(gfu, cmap="viridis", wireframe=False)      # any matplotlib name, or a webgui ramp
 Plot(gfu, line_width=1, edges=False)            # the lines, thinner or gone
-Plot(gfu, euler_angles=(20, 30, 0))             # the view the panel drags
+Plot(gfu, elev=30, azim=-60)                    # the view, in matplotlib's own three words
 Plot(gfu, deformation=0.7)                      # the deformation slider, by amount
 Plot(gfc, eval="imag")                          # which part of a complex value to colour
 pyplot.savefig("frame.png")
@@ -53,11 +53,21 @@ take go to the painter, the rest go to `Draw`, so `order`, `draw_vol` and `setti
 meaning. A payload built earlier by `ngsplot._ngsolve.render_data` may be plotted
 directly, and refuses the keywords that would have shaped it instead of ignoring them.
 
+A point of view is `elev`, `azim` and `roll`, in degrees: the three words of
+`Axes3D.view_init`, on a camera that stays where the page put it. Left out, they are the view the
+page opens with, straight at `xy`, which is what a flat picture wants; `elev=30, azim=-60` is the
+angle matplotlib's own 3D plots open with. The `euler_angles` triple a panel drag leaves behind is
+still what a payload carries and still what the painter reads, so a saved page replays with the
+camera it was saved with — while `Plot` refuses the name, rather than keep two spellings of one
+knob.
+
 [examples/ngsplot.ipynb](examples/ngsplot.ipynb) runs all of it against a 1D, a 2D and a 3D
-finite element space: the flat line of a function on a mesh of dimension 1, the surface case with
-its colourbar, the knobs side by side, a `CoefficientFunction` on a named mesh, a vector and a
-complex field, `L2(order=0)`, a `NumberSpace`, a solid seen from three angles, and a time loop
-written out as frames. It executes end to end; only the meshes need ngsolve.
+finite element space: the flat line of a function on a mesh of dimension 1 and the same curve as a
+circle in three dimensions, the surface case with its colourbar, the knobs side by side, a
+`CoefficientFunction` on a named mesh, a vector and a complex field, `L2(order=0)`, a
+`NumberSpace`, a solid seen from three angles, and a time loop that animates in the notebook
+itself -- an `animation.FuncAnimation` over `Plot` calls, shown with `to_jshtml`, no frames on
+disk. It executes end to end; only the meshes need ngsolve.
 
 ## Status
 
