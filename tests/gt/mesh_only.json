@@ -1,0 +1,168 @@
+{
+ "light_dir": [
+  0.30151134457776363,
+  0.30151134457776363,
+  0.9045340337332909
+ ],
+ "light_mat": [
+  0.3,
+  0.7,
+  10,
+  0.3
+ ],
+ "dark_backside": true,
+ "function_mode": 0,
+ "colormap_min": -0.5,
+ "colormap_max": 0.5,
+ "colormap_size": [
+  1,
+  1
+ ],
+ "tex_colormap": {
+  "size": null,
+  "data": [
+   0,
+   1,
+   0,
+   1
+  ],
+  "mag": 1003,
+  "min": 1003
+ },
+ "n_segments": 1,
+ "line_thickness": 0.008417508417508417,
+ "clear_color": 16777215,
+ "clear_alpha": 1,
+ "camera": {
+  "fov": 40,
+  "near": 1,
+  "far": 100,
+  "zoom": 1,
+  "pos": [
+   0,
+   0,
+   3
+  ],
+  "quat": [
+   0,
+   0,
+   0,
+   1
+  ],
+  "proj": [
+   1.8255051310470312,
+   0,
+   0,
+   0,
+   0,
+   2.7474774194546225,
+   0,
+   0,
+   0,
+   0,
+   -1.02020202020202,
+   -1,
+   0,
+   0,
+   -2.0202020202020203,
+   0
+  ]
+ },
+ "canvas": {
+  "x": 0,
+  "y": 0,
+  "w": 894,
+  "h": 594,
+  "buf_w": 894,
+  "buf_h": 594,
+  "dpr": 1
+ },
+ "objects_err": "TypeError: Cannot read properties of undefined (reading 'map')",
+ "labels": [
+  {
+   "text": "tooltip",
+   "x": -50,
+   "y": 10,
+   "w": 120,
+   "h": 28,
+   "font": "16px \"Times New Roman\"",
+   "color": "rgb(255, 255, 255)"
+  },
+  {
+   "text": "X",
+   "x": 143.21875,
+   "y": 526,
+   "w": 11.5625,
+   "h": 18,
+   "font": "16px \"Times New Roman\"",
+   "color": "rgb(0, 0, 0)"
+  },
+  {
+   "text": "Y",
+   "x": 83.21875,
+   "y": 466,
+   "w": 11.5625,
+   "h": 18,
+   "font": "16px \"Times New Roman\"",
+   "color": "rgb(0, 0, 0)"
+  },
+  {
+   "text": "Z",
+   "x": 84.109375,
+   "y": 526,
+   "w": 9.78125,
+   "h": 18,
+   "font": "16px \"Times New Roman\"",
+   "color": "rgb(0, 0, 0)"
+  }
+ ],
+ "name": "mesh_only",
+ "viewport": [
+  900,
+  600
+ ],
+ "render_data": {
+  "autoscale": true,
+  "colors": [
+   [
+    0.0,
+    1.0,
+    0.0,
+    1.0,
+    1.0
+   ]
+  ],
+  "deformation": false,
+  "deformation_scale": 1.0,
+  "draw_surf": null,
+  "draw_vol": null,
+  "edge_names": [
+   "bottom",
+   "right",
+   "top",
+   "left"
+  ],
+  "fullscreen": false,
+  "funcdim": 0,
+  "mesh_center": [
+   0.5,
+   0.5,
+   1.1125369292536007e-308
+  ],
+  "mesh_dim": 2,
+  "mesh_radius": 0.7071067811865476,
+  "mesh_regions_2d": 1,
+  "mesh_regions_3d": 0,
+  "multidim_animate": false,
+  "multidim_interpolate": false,
+  "names": [
+   "default"
+  ],
+  "ngsolve_version": "6.2.2608",
+  "objects": [],
+  "order2d": 1,
+  "order3d": 1,
+  "show_mesh": true,
+  "show_wireframe": true
+ }
+}
