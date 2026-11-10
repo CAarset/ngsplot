@@ -1,126 +1,127 @@
-# ngsplot
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/images/banner-dark.png">
+    <img src="docs/images/banner-light.png" alt="ngsplot: NGSolve's Draw, as a matplotlib figure" width="100%">
+  </picture>
+</p>
 
-Matplotlib plots that look exactly like NGSolve's `Draw`.
+<p align="center">
+  <a href="https://github.com/CAarset/ngsplot/actions/workflows/tests.yml"><img src="https://github.com/CAarset/ngsplot/actions/workflows/tests.yml/badge.svg" alt="Tests"></a>
+  <img src="https://img.shields.io/badge/python-3.10%2B-3776AB?logo=python&logoColor=white" alt="Python 3.10+">
+  <img src="https://img.shields.io/badge/NGSolve-6.2-0b7285" alt="NGSolve 6.2">
+  <img src="https://img.shields.io/badge/matplotlib-native-11557c" alt="matplotlib native">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-2ea043" alt="MIT licence"></a>
+</p>
 
-NGSolve's own `Draw` renders through a WebGL pipeline behind a live GUI control
-panel: correct and familiar, but awkward to drive from a script or a notebook.
-This package renders the same picture from the same data with matplotlib, so
-colour bars, `savefig`, subplots and animation come for free.
+**ngsplot** paints [NGSolve](https://ngsolve.org) finite element fields the way `ngsolve.webgui.Draw`
+does — the same subdivision, colour bands, lighting, antialiased lines and camera — into an
+ordinary matplotlib image. Subplots, colourbars, `savefig` and animations work as they always do,
+and nothing needs a browser.
 
-## Install
+<p align="center">
+  <img src="docs/images/draw-vs-plot.png" alt="The same field drawn by ngsolve.webgui.Draw in a browser and by ngsplot in matplotlib" width="82%">
+  <br>
+  <sub>One payload, two renderers. Away from the one-pixel mesh lines, 99.7–99.98% of pixels are
+  byte-identical to the browser's screenshot; the test suite checks every recorded scene against
+  its screenshot.</sub>
+</p>
 
+## Installation
+
+```bash
+pip install "ngsplot[ngsolve] @ git+https://github.com/CAarset/ngsplot"
 ```
-python -m venv .venv && . .venv/bin/activate
-pip install -e .            # add [test] for pytest, [gt] for the ground truth harness
-```
 
-## Usage
+ngsplot itself needs only NumPy and matplotlib; NGSolve is what turns a `GridFunction` into
+something to paint.
+
+## Quick start
 
 ```python
-from ngsplot import Plot          # the counterpart of ngsolve.webgui.Draw
-from ngsplot import pyplot        # the figure around it: colorbar, savefig, gca, cla, close
+import ngsolve as ngs
+from ngsplot import Plot, pyplot
 
-Plot(gfu, colorbar=True)                        # a GridFunction, as Draw draws it
-Plot(mesh)                                      # the mesh alone, as Draw(mesh) draws it
-Plot(cf, mesh=mesh)                             # a CoefficientFunction needs its mesh
-Plot(mesh=mesh)                                 # spelled either way, like Draw
-Plot(gfu, vmin=0, vmax=1, ncolors=16)           # the panel's own min, max and bands
-Plot(gfu, cmap="viridis", wireframe=False)      # any matplotlib name, or a webgui ramp
-Plot(gfu, line_width=1, edges=False)            # the lines, thinner or gone
-Plot(gfu, elev=30, azim=-60)                    # the view, in matplotlib's own three words
-Plot(gfu, deformation=0.7)                      # the deformation slider, by amount
-Plot(gfc, eval="imag")                          # which part of a complex value to colour
-Plot(gfu, fit="box", width=600, height=None)    # a long domain fills a canvas of its shape
-Plot(gfu, colorbar={"orientation": "horizontal", "label": "u"})   # the bar, in its own words
-pyplot.savefig("frame.png")
+mesh = ngs.Mesh(ngs.unit_square.GenerateMesh(maxh=0.1))
+gfu = ngs.GridFunction(ngs.H1(mesh, order=3))
+gfu.Set(ngs.sin(4 * ngs.x) * ngs.cos(5 * ngs.y))
+
+Plot(gfu, colorbar=True)            # what Draw(gfu) shows, as a matplotlib AxesImage
+pyplot.savefig("gfu.png")           # the rendered pixels, byte for byte
 ```
 
-A picture is one `AxesImage` holding the renderer's own array, laid on an axis that covers the
-figure, so everything matplotlib does from there still works: `Plot(gfu, ax=ax)` into anybody's
-`subplots` or `gridspec`, `pyplot.colorbar` on the last picture or a given one, `cla()` and
-`close()`, and a savefig at the figure's own dpi that reproduces the rendered array byte for
-byte, which is what makes a loop of frames an animation. A colourbar is measured against the
-picture it keys and stands through a repaint, so a panel that redraws every frame keeps the width
-it was given. It goes underneath a picture painted more than twice as wide as it is tall, and
-labels as many band edges as it has room for, always both ends. A bar on a `cax` of your own
-stays through a repaint that asks for no bar, and keys the new picture.
+`Plot` accepts what `Draw` accepts, and the controls of the viewer's panel as keywords:
 
 ```python
-from matplotlib import pyplot as mpl
-
-fig, axes = mpl.subplots(1, 2, figsize=(9, 3.4))
-pyplot.Plot(u, ax=axes[0], colorbar=True)
-pyplot.Plot(v, ax=axes[1], cmap="viridis", ncolors=16)
-axes[0].set_title("u")
+Plot(gfu, ax=ax, cmap="viridis", ncolors=16, vmin=-1, vmax=1)   # into your own subplots
+Plot(gfu, elev=30, azim=-60, wireframe=False, deformation=0.2)   # camera and display
+Plot(gfc, eval="imag")                                           # which part of a value
+Plot(gfu, fit="box", width=900, height=None)                     # a long domain, framed tightly
 ```
 
-Keywords are sorted by who reads them: the ones `ngsplot.scene.paint` and `ngsplot.camera.Camera`
-take go to the painter, the rest go to `Draw`, so `order`, `draw_vol` and `settings` keep their
-meaning. A payload built earlier by `ngsplot.render_data` may be plotted directly, and refuses the
-keywords that would have shaped it instead of ignoring them.
+## Features
 
-`Draw` frames the bounding sphere of the mesh, so a long domain is a strip across the middle of
-the canvas: a 6 x 1.2 pipe fills 326 x 68 px of 480 x 360. `fit="box"` frames the box of the
-picture instead, with the same margin (`camera.FILL`, 92% of the tighter side), and a side given
-as `None` is sized to that box, so `width=400, height=None` gives the pipe a 400 x 107 canvas. A
-picture seen at a slant is framed only as close as the page's own framing ever brings a point to
-the camera, so a long mesh tilted towards you stays smaller than its box would allow. `Draw`'s
-`center` and `radius` still frame by hand: the camera puts `0.458 * height / radius` pixels on a
-unit of length in the plane through `center`, facing it.
+- **Faithful.** A NumPy port of the webgui renderer: Bézier subdivision, banded colour map, Phong
+  lighting, 4× MSAA lines and the perspective camera, checked pixel by pixel against screenshots.
+- **matplotlib all the way.** A picture is one `AxesImage`: `ax=`, gridspec, titles, `colorbar`,
+  `savefig` and `FuncAnimation` need nothing new.
+- **Everything `Draw` draws.** Meshes, `GridFunction`s and `CoefficientFunction`s on 1D, 2D and 3D
+  meshes, vector and complex fields, `L2`, `NumberSpace`.
+- **Layout you control.** `fit="box"` frames long domains, a wide picture gets its colourbar
+  underneath, and `ngsplot.frame` returns the camera and canvas size before anything is painted.
+- **Made for live views.** `ngsplot.render_data` builds the payload without a widget — no comm, no
+  notebook bloat, any thread — and painting is plain NumPy: about 0.15 s for a panel of a
+  1500-element cubic field.
 
-`ngsplot.frame(payload, ...)` takes the same `fit`, `width`, `height` and point of view and paints
-nothing: it returns the camera, whose `width` and `height` are the canvas a box fit makes, so a
-figure can be laid out for the picture before it is painted. `Plot(payload, view=view)` then paints
-with that camera, on that canvas, without fitting again — which a time loop over one mesh does
-once rather than every frame (as long as no deformation moves the mesh between frames).
+## Gallery
 
-A live view of a running computation builds the payloads where the fields live and paints them
-where it likes. `render_data` builds no widget, so it costs no comm and no widget state in a
-notebook and may run on any thread; painting needs only numpy and matplotlib:
+<table>
+  <tr>
+    <td colspan="2" align="center">
+      <img src="docs/images/colormaps.png" alt="One field in four colour maps">
+      <br><sub>Any matplotlib colour map, cut into the viewer's bands</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="62%">
+      <img src="docs/images/solid.png" alt="A machined block with a hole and a dimple">
+      <br><sub>Solids with curved elements, from any angle</sub>
+    </td>
+    <td align="center">
+      <img src="docs/images/time-loop.gif" alt="An animated wave crossing a square">
+      <br><sub>One <code>Plot</code> per frame is an animation</sub>
+    </td>
+  </tr>
+  <tr>
+    <td colspan="2" align="center">
+      <img src="docs/images/channel.png" alt="A long channel framed by its box">
+      <br><sub><code>fit="box"</code> frames a long domain, with its colourbar underneath</sub>
+    </td>
+  </tr>
+</table>
 
-```python
-import ngsplot
-from ngsplot import pyplot
+The [demo notebook](examples/ngsplot.ipynb) runs through 1D, 2D and 3D spaces, every keyword, and
+an animation embedded in the notebook itself.
 
-payload = ngsplot.render_data(gfu)              # cheap: no widget, no browser
-view = ngsplot.frame(payload, fit="box", width=400, height=None)   # once: lay the figure out
-image = pyplot.Plot(payload, ax=ax, view=view, colorbar=True)      # every frame
+## How it works
+
+`ngsplot.render_data` asks NGSolve for the payload `Draw` would send to the browser.
+`ngsplot.scene.paint` rasterises it in NumPy, the way the viewer's shaders do, and `Plot` lays the
+pixels on a matplotlib axis. Two things are left out on purpose: the viewer's control panel, and
+colour along a 1D mesh, which the viewer draws as a plain black line and so does ngsplot.
+
+## Development
+
+```bash
+git clone https://github.com/CAarset/ngsplot && cd ngsplot
+pip install -e ".[test]"
+pytest
 ```
 
-A panel of a 1532-element P3 field on a 400 x 107 canvas paints in about 0.14 s of CPU time with
-the view framed once (0.16 s fitting it each time), surface and lines together.
+The tests compare against screenshots of the real viewer in `tests/gt/`. `tools/capture_gt.py`
+and `tools/capture_dims.py` record them again with headless Chromium (`pip install -e ".[gt]"`),
+and `tools/readme_images.py` redraws the pictures on this page.
 
-A point of view is `elev`, `azim` and `roll`, in degrees: the three words of
-`Axes3D.view_init`, on a camera that stays where the page put it. Left out, they are the view the
-page opens with, straight at `xy`, which is what a flat picture wants; `elev=30, azim=-60` is the
-angle matplotlib's own 3D plots open with. The `euler_angles` triple a panel drag leaves behind is
-still what a payload carries and still what the painter reads, so a saved page replays with the
-camera it was saved with — while `Plot` refuses the name, rather than keep two spellings of one
-knob.
+## Licence
 
-[examples/ngsplot.ipynb](examples/ngsplot.ipynb) runs all of it against a 1D, a 2D and a 3D
-finite element space: the flat line of a function on a mesh of dimension 1 and the same curve as a
-circle in three dimensions, the surface case with its colourbar, the knobs side by side, eight
-colour maps on one oscillating field, a `CoefficientFunction` on a named mesh, a vector and a
-complex field, `L2(order=0)`, a `NumberSpace`, a long channel framed by its box, a solid seen from
-three angles, and a time loop that animates in the notebook itself -- an
-`animation.FuncAnimation` over `Plot` calls, shown with `to_jshtml`, no frames on disk. It executes
-end to end; only the meshes need ngsolve.
-
-## Status
-
-Every stage of the pipeline is in place and covered by tests that transcribe the corresponding
-GLSL or TypeScript, or compare against recordings of the real page: the colour ramp and band
-quantisation and the label formatting of its colourbar (`colormap`, `labels`), the Bezier
-geometry and value range a payload carries (`geometry`, `bezier`), the Phong shading
-(`lighting`), the camera whose object matrix takes every drag (`camera`), the software raster
-with the same 4x MSAA, mitre strip and depth bias as the page's thick lines (`raster`), the
-settings and range rules of the panel (`scene`), the payload `Draw` would have sent
-(`_ngsolve`) and the matplotlib layer above (`pyplot`).
-
-`docs/SPEC.md` records the reverse-engineered visual, and `tools/capture_gt.py` and
-`tools/capture_dims.py` regenerate `tests/gt/` from a headless chromium running the real
-renderer. Two deviations from the page are deliberate and documented: the GUI panel and the
-notebook widget are not part of the picture, and a function on a 1D mesh is drawn as the page
-draws it -- a flat black line along the mesh -- rather than coloured along its values.
-
+MIT; see [LICENSE](LICENSE). ngsplot is an independent reimplementation and is not affiliated
+with the NGSolve project. NGSolve and Netgen are licensed under the LGPL-2.1.

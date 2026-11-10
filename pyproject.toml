@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64"]
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,11 +7,29 @@ name = "ngsplot"
 version = "0.1.0"
 description = "Matplotlib plots that look exactly like NGSolve's Draw"
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "CAarset" }]
 requires-python = ">=3.10"
 dependencies = ["numpy", "matplotlib"]
+keywords = ["ngsolve", "netgen", "finite elements", "fem", "matplotlib", "visualization"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Matplotlib",
+    "Intended Audience :: Science/Research",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+
+[project.urls]
+Homepage = "https://github.com/CAarset/ngsplot"
+Issues = "https://github.com/CAarset/ngsplot/issues"
 
 [project.optional-dependencies]
-test = ["pytest"]
+ngsolve = ["ngsolve"]
+test = ["pytest", "ngsolve"]
 gt = ["ngsolve", "playwright"]
 
 [tool.setuptools.packages.find]

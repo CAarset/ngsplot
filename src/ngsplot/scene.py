@@ -7,7 +7,6 @@ out takes the value ``three/gui.ts`` gives the panel on a fresh draw.  A payload
 from ``ngsolve.webgui`` therefore paints the picture ``ngsolve.webgui`` would have
 painted, ``Draw`` included in the payload its own ``gui_settings``, be it in the sections
 a panel snapshot has or in the flat names ``Draw`` itself writes.
-See docs/SPEC.md, "Colour", and docs/DIMS.md.
 
 The knobs deliberately mirror matplotlib's names: ``vmin``/``vmax`` switch off the
 autoscaled range as passing them does to ``imshow``, ``cmap`` takes any matplotlib
@@ -288,8 +287,7 @@ def paint(render_data, *, width=None, height=None, view=None, canvas=None, fit=N
     """Draw ``render_data`` into a :class:`ngsplot.raster.Canvas` and return it.
 
     ``width`` and ``height`` are the drawing buffer, which is the size of the page's
-    canvas rather than of the element holding it (docs/OVERLAYS.md, "The overlay
-    layer").  Pass ``view`` to draw with a camera built elsewhere -- by :func:`frame`, say --
+    canvas rather than of the element holding it.  Pass ``view`` to draw with a camera built elsewhere -- by :func:`frame`, say --
     which brings its canvas with it, and any other
     :class:`ngsplot.camera.Camera` keyword -- ``elev``, ``azim``, ``roll``, the page's
     own ``euler_angles`` or ``transformations`` -- to turn the default one; a payload

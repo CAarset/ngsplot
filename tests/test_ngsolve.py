@@ -193,7 +193,7 @@ def test_a_solid_from_ngsolve_paints_a_solid():
 
 
 def test_a_line_from_ngsolve_is_drawn_flat_and_in_black():
-    """The 1D payload has no range, and so nothing to colour a function with (docs/DIMS.md)."""
+    """The 1D payload has no range, and so nothing to colour a function with."""
     mesh = capture_dims.mesh_1d()
     gfu = ngs.GridFunction(ngs.H1(mesh, order=2))
     gfu.Set(ngs.x * ngs.x)

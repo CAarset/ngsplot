@@ -10,3 +10,13 @@ dist/
 frames/
 .ipynb_checkpoints/
 .scratch/
+
+# notes kept out of the published repository: every Markdown file but a README
+*.md
+!README.md
+
+# assistant and agent files
+.claude/
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md

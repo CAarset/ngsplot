@@ -5,7 +5,7 @@ page that produced it ``<scene>.png.html`` (which embeds the render data the ngs
 sent), and ``<scene>.json``, the uniform values read out of the live renderer while it drew
 that scene.  ``tools/probe_camera.py`` adds ``camera.json`` with the matrices of every scene.
 
-``tests/gt/dims`` holds the captures taken for ``docs/DIMS.md``, one per mesh dimension and
+``tests/gt/dims`` holds the captures of ``tools/capture_dims.py``, one per mesh dimension and
 per kind of input.  They are the same screenshots and pages, but their JSON is a summary of
 the payload rather than the uniforms read off a live renderer.
 """
@@ -45,7 +45,7 @@ def framebuffer_of(scene_name):
     """``(width, height)`` of the drawing buffer the scene was rendered into.
 
     The uniform records of ``tools/capture_gt.py`` name the buffer outright.  The summaries
-    written for ``tests/gt/dims`` (``docs/DIMS.md``) do not, so those fall back to the
+    written for ``tests/gt/dims`` do not, so those fall back to the
     screenshot, which carries the buffer at its top left plus a 6 px gutter of page."""
     try:
         canvas = uniforms_of(scene_name)["canvas"]

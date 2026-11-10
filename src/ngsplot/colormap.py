@@ -2,7 +2,7 @@
 
 The renderer stores the palette in an ``ncolors x 1`` float texture sampled with
 ``GL_NEAREST``, so the value->colour map is a step function: hard band edges, no
-interpolation.  See docs/SPEC.md, "Colour".
+interpolation.
 """
 
 import numpy as np

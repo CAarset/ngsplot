@@ -1,7 +1,7 @@
 """Phong shading identical to the webgui renderer.
 
 The light lives in *view* space and specular uses the per-fragment view vector, so one
-colour band shades as a smooth gradient across the canvas.  See docs/SPEC.md, "Shading".
+colour band shades as a smooth gradient across the canvas.
 """
 
 import numpy as np

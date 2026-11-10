@@ -1,9 +1,9 @@
 """One call, every dimension: lines, surfaces, solids, spaces, and bare coefficient functions.
 
-``tests/gt/dims`` holds the captures recorded for ``docs/DIMS.md`` -- a 1D mesh, a 2D surface
+``tests/gt/dims`` holds the captures of ``tools/capture_dims.py`` -- a 1D mesh, a 2D surface
 mesh, a 3D solid, a ``NumberSpace``, an ``L2`` of order 0, a ``CoefficientFunction`` drawn
 with and without a mesh, a vector field, an ``H(curl)`` field and a complex ``H1`` one.  Four
-findings of that document decide what a test may ask of each.
+findings from recording them decide what a test may ask of each.
 
 * The recorded screenshots are of a *page*, so they carry axes and a colourbar that ngsplot
   leaves to matplotlib.  The comparison is made inside the mesh, away from that furniture.
@@ -202,7 +202,7 @@ def test_a_complex_payload_says_so_and_the_caller_can_overrule_it():
 def test_the_surface_capture_agrees_with_the_page_in_outline_only():
     """``surface_scalar`` is a flat square wearing a bump's clothes, so it settles nothing.
 
-    ``docs/DIMS.md``, "Capture limitations": the gmsh import kept 2 coordinates per
+    A limitation of the capture: the gmsh import kept 2 coordinates per
     point and dropped ``z = 0.15 sin(pi x) sin(pi y)``, and the written ``.msh`` declared a
     physical group without any 1D elements, so the mesh has no boundary edges either.  Its
     outline -- rows, columns, how much ink lies between them -- is reproduced exactly.  A
@@ -226,12 +226,13 @@ def test_the_surface_capture_agrees_with_the_page_in_outline_only():
     # ... and the gap this capture cannot settle stays on record rather than being masked
     difference = np.abs(picture - ours).max(axis=2)
     assert (difference[interior(canvas)] > 8).mean() > 0.01, (
-        "the shading of surface_scalar matches after all: DIMS limitation 3 is settled, this "
-        "scene belongs in SPACES with the rest, and the capture that mangled it should be redone")
+        "the shading of surface_scalar matches after all: the capture's limitation is settled, "
+        "this scene belongs in SPACES with the rest, and the capture that mangled it should be "
+        "redone")
 
 
 def test_a_coefficient_function_without_a_mesh_never_reaches_a_picture():
-    """``cf_nomesh`` is in DIMS as a failure, not a scene: there is nothing to compare to.
+    """``cf_nomesh`` is recorded as a failure, not a scene: there is nothing to compare to.
 
     ``Draw(cf)`` with nothing to sample on raises ``RuntimeError: Cannot draw
     CoefficientFunction without mesh`` inside ``ngsolve/webgui.py:119`` before it writes any

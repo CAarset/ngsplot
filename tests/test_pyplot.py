@@ -165,7 +165,7 @@ def test_the_view_is_named_the_way_a_viewer_names_it():
 
 
 def test_the_triple_a_page_drag_leaves_behind_is_not_a_plot_keyword():
-    """One spelling of a point of view, and it is the one a reader knows (docs/SPEC.md)."""
+    """One spelling of a point of view, and it is the one a reader knows."""
     payload = gtdata.render_data_of("dims/cf_mesh")
     with pytest.raises(TypeError, match="elev, azim and roll"):
         pyplot.Plot(payload, euler_angles=[20.0, 30.0, 0.0])
@@ -181,7 +181,7 @@ def test_a_thing_that_is_not_a_knob_is_refused_rather_than_ignored():
 
 def test_the_part_of_a_value_asked_for_is_named_either_way():
     """``eval`` is the panel's name for it and ``function_mode`` the renderer's, and Draw's own
-    spelling reaches nothing (docs/SPEC.md, "Why Draw is clunky"), so this layer answers for it."""
+    spelling reaches nothing (``netgen/webgui.py:564-573``), so this layer answers for it."""
     payload = gtdata.render_data_of("dims/complex_h1")
     for name, mode in [("real", 5.0), ("imag", 6.0), ("norm", 3.0), ("x", 0.0), (6, 6.0)]:
         assert np.array_equal(pyplot.Plot(payload, eval=name).get_array(),

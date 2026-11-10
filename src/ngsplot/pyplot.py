@@ -33,7 +33,8 @@ The keywords are split by what they are for, and the rule is one line long:
   that is already built cannot be, so there the amount goes to the painter, which takes it as
   ``scene.paint(deformation=...)``.
 * ``eval`` is the exception worth spelling out: ``Draw`` reads it under a name nobody writes
-  (docs/SPEC.md, "Why Draw is clunky") so it reaches nothing.  Here it means what the panel's
+  -- it asks for ``eval_`` and then reads ``eval`` (``netgen/webgui.py:564-573``) -- so it
+  reaches nothing.  Here it means what the panel's
   dropdown means -- ``"real"``, ``"imag"``, ``"norm"``, ``"x"`` -- or the number from
   ``function.frag``, and it is the same knob as ``function_mode``.
 * the point of view is spelled the way a viewer spells it: ``elev``, ``azim`` and ``roll``, in
