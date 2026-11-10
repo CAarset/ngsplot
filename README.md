@@ -19,11 +19,10 @@ ordinary matplotlib image. Subplots, colourbars, `savefig` and animations work a
 and nothing needs a browser.
 
 <p align="center">
-  <img src="docs/images/draw-vs-plot.png" alt="The same field drawn by ngsolve.webgui.Draw in a browser and by ngsplot in matplotlib" width="82%">
+  <img src="docs/images/draw-vs-plot.png" alt="A quadratic field on a machined block, drawn by ngsolve.webgui.Draw in a browser and by ngsplot in matplotlib" width="100%">
   <br>
-  <sub>One payload, two renderers. Away from the one-pixel mesh lines, 99.7–99.98% of pixels are
-  byte-identical to the browser's screenshot; the test suite checks every recorded scene against
-  its screenshot.</sub>
+  <sub>One payload, two renderers: a quadratic field on curved tetrahedra. Away from the one-pixel
+  mesh lines, 99.7% of the pixels are byte-identical to the browser's screenshot.</sub>
 </p>
 
 ## Installation
@@ -61,7 +60,9 @@ Plot(gfu, fit="box", width=900, height=None)                     # a long domain
 ## Features
 
 - **Faithful.** A NumPy port of the webgui renderer: Bézier subdivision, banded colour map, Phong
-  lighting, 4× MSAA lines and the perspective camera, checked pixel by pixel against screenshots.
+  lighting, 4× MSAA lines and the perspective camera. Away from the one-pixel mesh lines, 99.7–99.98%
+  of pixels are byte-identical to the browser viewer's own screenshots, and the tests check every
+  recorded scene against its screenshot.
 - **matplotlib all the way.** A picture is one `AxesImage`: `ax=`, gridspec, titles, `colorbar`,
   `savefig` and `FuncAnimation` need nothing new.
 - **Everything `Draw` draws.** Meshes, `GridFunction`s and `CoefficientFunction`s on 1D, 2D and 3D
@@ -82,19 +83,15 @@ Plot(gfu, fit="box", width=900, height=None)                     # a long domain
     </td>
   </tr>
   <tr>
-    <td align="center" width="62%">
-      <img src="docs/images/solid.png" alt="A machined block with a hole and a dimple">
-      <br><sub>Solids with curved elements, from any angle</sub>
-    </td>
-    <td align="center">
-      <img src="docs/images/time-loop.gif" alt="An animated wave crossing a square">
-      <br><sub>One <code>Plot</code> per frame is an animation</sub>
+    <td colspan="2" align="center">
+      <img src="docs/images/channel.png" alt="A long channel framed by its box">
+      <br><sub><code>fit="box"</code> frames a long domain, with its colourbar underneath</sub>
     </td>
   </tr>
   <tr>
     <td colspan="2" align="center">
-      <img src="docs/images/channel.png" alt="A long channel framed by its box">
-      <br><sub><code>fit="box"</code> frames a long domain, with its colourbar underneath</sub>
+      <img src="docs/images/time-loop.gif" alt="An animated wave crossing a square">
+      <br><sub>One <code>Plot</code> per frame is an animation</sub>
     </td>
   </tr>
 </table>
@@ -119,7 +116,7 @@ pytest
 
 The tests compare against screenshots of the real viewer in `tests/gt/`. `tools/capture_gt.py`
 and `tools/capture_dims.py` record them again with headless Chromium (`pip install -e ".[gt]"`),
-and `tools/readme_images.py` redraws the pictures on this page.
+and `tools/readme_images.py` redraws the pictures on this page, the browser's included.
 
 ## Licence
 

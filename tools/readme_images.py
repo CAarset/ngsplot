@@ -2,11 +2,11 @@
 
 Every picture is laid on an axis exactly the size of its canvas, so matplotlib copies the
 renderer's pixels instead of resampling them -- a one-pixel wireframe line survives -- and any
-scaling is left to the browser showing the README.  The comparison with the browser viewer
-reads a recorded screenshot of ``ngsolve.webgui.Draw`` from ``tests/gt``; everything else
-needs ngsolve to build its mesh.
+scaling is left to the browser showing the README.  Every picture needs ngsolve to build its
+mesh, and the comparison with the browser viewer needs the headless Chromium of the ``gt``
+extra as well (``tools/capture_gt.py``):
 
-    .venv/bin/python tools/readme_images.py
+    PLAYWRIGHT_BROWSERS_PATH=$PWD/.pw-browsers .venv/bin/python tools/readme_images.py
 """
 
 import os
@@ -24,9 +24,8 @@ from netgen.geom2d import SplineGeometry  # noqa: E402
 from netgen.occ import Box, Cylinder, OCCGeometry, Pnt, Sphere, Z  # noqa: E402
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path[:0] = [os.path.join(_ROOT, "src"), os.path.join(_ROOT, "tests")]
+sys.path.insert(0, os.path.join(_ROOT, "src"))
 
-import gtdata  # noqa: E402
 import ngsplot  # noqa: E402
 from ngsplot import pyplot, scene  # noqa: E402
 
@@ -95,29 +94,6 @@ def _clear_canvas(view):
     return raster.Canvas(view.width, view.height, background=(1.0, 1.0, 1.0, 0.0))
 
 
-def draw_vs_plot(scene_name="square_rotated", margin=14):
-    """The browser's picture and ngsplot's, from one recorded payload, cropped to the mesh."""
-    payload = gtdata.render_data_of(scene_name)
-    width, height = gtdata.framebuffer_of(scene_name)
-    ours = scene.paint(payload, width=width, height=height).to_uint8()[..., :3]
-    theirs = gtdata.png_of(scene_name)[:height, :width, :3]
-    rows, cols = np.nonzero((ours < 250).any(axis=2))
-    crop = (slice(rows.min() - margin, rows.max() + margin),
-            slice(cols.min() - margin, cols.max() + margin))
-    left, right = theirs[crop], ours[crop]
-    h, w = left.shape[:2]
-    gap, title = 40, 44
-    fig = figure(2 * w + gap, h + title)
-    for x, picture, label in ((0, left, "ngsolve.webgui.Draw  ·  browser"),
-                              (w + gap, right, "ngsplot.Plot  ·  matplotlib")):
-        ax = axes_at(fig, x, title, w, h)
-        ax.imshow(picture, interpolation="nearest")
-        ax.set_axis_off()
-        fig.text((x + w / 2) / (2 * w + gap), 1 - 22 / (h + title), label, ha="center",
-                 va="center", fontsize=13, family="monospace", color="#1f2328")
-    save(fig, "draw-vs-plot.png")
-
-
 def waves(maxh=0.08):
     """One oscillating field on the unit square, between -1 and 1."""
     mesh = ngs.Mesh(ngs.unit_square.GenerateMesh(maxh=maxh))
@@ -143,21 +119,57 @@ def colormaps(payload, names=("ngsolve", "viridis", "RdBu_r", "twilight")):
     save(fig, "colormaps.png")
 
 
-def solid(width=520, bar=110):
-    """A machined block, P2 on curved tetrahedra: a hole through it and a dimple in its top."""
+def machined_block():
+    """A quadratic field on a machined block of curved tetrahedra: a hole and a dimple."""
     shape = (Box(Pnt(0, 0, 0), Pnt(2, 1, 1)) - Cylinder(Pnt(0.6, 0.5, 0), Z, r=0.3, h=1)
              - Sphere(Pnt(1.5, 0.5, 1), 0.35))
     mesh = ngs.Mesh(OCCGeometry(shape).GenerateMesh(maxh=0.15))
     mesh.Curve(2)
     u = ngs.GridFunction(ngs.H1(mesh, order=2))
     u.Set(ngs.sin(2 * ngs.x) * ngs.cos(2 * ngs.y) + ngs.z)
-    payload = ngsplot.render_data(u)
-    view = ngsplot.frame(payload, fit="box", width=width, height=None, elev=40, azim=-30)
-    fig = figure(view.width + bar, view.height)
-    image = pyplot.Plot(payload, ax=axes_at(fig, 0, 0, view.width, view.height), view=view,
-                        ncolors=12)
-    pyplot.colorbar(image, cax=axes_at(fig, view.width + 10, 30, 14, view.height - 60))
-    save(fig, "solid.png")
+    return u
+
+
+def draw_vs_plot(margin=14):
+    """The machined block as the browser draws it and as ngsplot paints it, side by side.
+
+    One payload for both, with the camera recorded in it the way a page records a drag --
+    ``elev=40, azim=-30`` is the page's ``euler_angles`` triple ``[-40, -30, 0]`` in the order
+    ``ZYX`` -- so the browser and ngsplot are asked for the same picture.  The browser's is a
+    screenshot of the real ``ngsolve.webgui`` page in headless Chromium, taken by
+    ``tools/capture_gt.py``; ngsplot paints at that page's drawing buffer, and both are cropped
+    to the mesh, which leaves out the overlays the page draws over its canvas.
+    """
+    import tempfile
+
+    import capture_gt
+    from matplotlib import image as mimage
+
+    payload = ngsplot.render_data(machined_block(), settings={
+        "camera": {"euler_angles": [-40.0, -30.0, 0.0, "ZYX"]}})
+    with tempfile.TemporaryDirectory() as tmp:
+        png = os.path.join(tmp, "draw.png")
+        buffer = capture_gt.shoot(payload, png)["canvas"]
+        width, height = buffer["buf_w"], buffer["buf_h"]
+        theirs = np.rint(mimage.imread(png)[:height, :width, :3] * 255).astype(np.uint8)
+    ours = scene.paint(payload, width=width, height=height).to_uint8()[..., :3]
+    rows, cols = np.nonzero((ours < 250).any(axis=2))
+    crop = (slice(rows.min() - margin, rows.max() + margin),
+            slice(cols.min() - margin, cols.max() + margin))
+    left, right = theirs[crop], ours[crop]
+    h, w = left.shape[:2]
+    gap, title = 40, 44
+    fig = figure(2 * w + gap, h + title)
+    for x, picture, label in ((0, left, "ngsolve.webgui.Draw  ·  browser"),
+                              (w + gap, right, "ngsplot.Plot  ·  matplotlib")):
+        ax = axes_at(fig, x, title, w, h)
+        ax.imshow(picture, interpolation="nearest")
+        ax.set_axis_off()
+        fig.text((x + w / 2) / (2 * w + gap), 1 - 22 / (h + title), label, ha="center",
+                 va="center", fontsize=13, family="monospace", color="#1f2328")
+    same = (left == right).all(axis=2).mean()
+    save(fig, "draw-vs-plot.png")
+    print(f"  {same * 100:.1f}% of the cropped pixels byte-identical, lines included")
 
 
 def long_domain(payload):
@@ -200,7 +212,6 @@ def main():
     banner(long_payload)
     draw_vs_plot()
     colormaps(ngsplot.render_data(waves()))
-    solid()
     long_domain(long_payload)
     time_loop()
 
