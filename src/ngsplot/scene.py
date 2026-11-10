@@ -38,13 +38,14 @@ def _section(settings, name):
     return section if isinstance(section, dict) else {}
 
 
-def settings_of(render_data, *, is_complex=False):
+def settings_of(render_data, *, is_complex=None):
     """The effective settings of ``render_data``: the panel defaults, then its own.
 
-    ``is_complex`` says what the payload cannot: a complex function reaches the page
-    split into two components (``ngsolve/webgui.py:304-305``) and is otherwise
-    indistinguishable from a vector one, but draws the real part rather than the
-    length, and is not deformed along it.
+    A complex function arrives split into its real and imaginary parts with ``is_complex``
+    written beside them (``ngsolve/webgui.py:303-305``), and that word is what makes it draw
+    the real part rather than the length of the pair and keep its geometry undeformed.  It is
+    taken from the payload; the keyword is for a pair that arrived without one -- a complex
+    coefficient function assembled by hand, say -- and for overruling a payload that has it.
 
     A payload records the panel in ``gui_settings``, in the same sections the lil-gui
     status object has (``Colormap``, ``Misc``, ``Objects``, ``camera``), and leaves out
@@ -80,6 +81,9 @@ def settings_of(render_data, *, is_complex=False):
     # complex function draws its real part and a vector its length, both as the panel does
     # (gui.ts:530-563); a payload may say `eval` outright, which outranks the panel.
     funcdim = int(render_data.get("funcdim", 1))
+    if is_complex is None:
+        is_complex = render_data.get("is_complex", False)
+    is_complex = bool(is_complex)
     mode = 5.0 if is_complex else (3.0 if funcdim in (2, 3) else 0.0)
     mode = settings.get("eval", mode)
     mode = render_data.get("eval", mode)
@@ -88,7 +92,7 @@ def settings_of(render_data, *, is_complex=False):
     phase = float(_section(settings, "Complex").get("phase", 0.0))
     out["complex_scale"] = (float(np.cos(-phase)), float(np.sin(-phase)))
     out["mesh_only"] = int(render_data.get("funcdim", 1)) == 0
-    out["is_complex"] = bool(is_complex)
+    out["is_complex"] = is_complex
     return out
 
 
@@ -179,7 +183,7 @@ def paint(render_data, *, width, height, view=None, canvas=None,
           vmin=None, vmax=None, autoscale=None, cmap=None, ncolors=None,
           n_segments=None, line_width=None, wireframe=None, edges=None,
           function_mode=None, complex_scale=None, dark_backside=None,
-          deformation=None, is_complex=False, **camera_kwargs):
+          deformation=None, is_complex=None, **camera_kwargs):
     """Draw ``render_data`` into a :class:`ngsplot.raster.Canvas` and return it.
 
     ``width`` and ``height`` are the drawing buffer, which is the size of the page's
@@ -198,10 +202,10 @@ def paint(render_data, *, width, height, view=None, canvas=None,
     the amount the geometry is pushed along the value, which a payload that says it
     sent flat geometry needs lifted for the lines as much as for the surface.
 
-    ``is_complex`` says what no payload records: that the two components of the
-    function are the real and the imaginary part of one complex value, which the viewer
-    colours by real part rather than by length.  ``complex_scale`` then turns that part
-    by an angle, as the phase slider of the panel does.
+    ``is_complex`` is taken from the payload, which says so when the function it came from
+    was complex; pass it to draw a real/imaginary pair as one complex value, or to ask for
+    the length of a complex one.  ``complex_scale`` then turns the drawn part by an angle,
+    as the phase slider of the panel does.
     """
     settings = settings_of(render_data, is_complex=is_complex)
     if settings["vectors"]:

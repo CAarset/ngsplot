@@ -209,14 +209,18 @@ def test_a_payload_without_a_range_is_spread_over_the_unit_interval():
 def test_which_part_of_a_value_is_drawn_is_the_panels_choice():
     """``gui.ts:530-563``: a complex value by its real part, a vector by its length.
 
-    The payload splits a complex function into two components on the way out, so which
-    of them it is has to be said here; a payload that says ``eval`` outright, as the
-    page lets a ``Draw(eval=...)`` do, is taken over both.
+    ``BuildRenderData`` splits a complex function into two components and writes
+    ``is_complex`` next to them (``ngsolve/webgui.py:303-305``), so the payload carries the
+    distinction itself; the keyword is for a pair that came without it.  A payload that
+    says ``eval`` outright, as the page lets a ``Draw(eval=...)`` do, outranks both.
     """
     assert scene.settings_of({"funcdim": 1})["function_mode"] == 0.0
     assert scene.settings_of({"funcdim": 2})["function_mode"] == 3.0
     assert scene.settings_of({"funcdim": 3})["function_mode"] == 3.0
+    assert scene.settings_of({"funcdim": 2, "is_complex": True})["function_mode"] == 5.0
+    assert scene.settings_of({"funcdim": 2, "is_complex": True})["is_complex"] is True
     assert scene.settings_of({"funcdim": 2}, is_complex=True)["function_mode"] == 5.0
+    assert scene.settings_of({"funcdim": 2, "is_complex": True}, is_complex=False)["function_mode"] == 3.0
     assert scene.settings_of({"funcdim": 2, "eval": 1})["function_mode"] == 1.0
     assert scene.settings_of({"funcdim": 2, "gui_settings": {"eval": 0}})["function_mode"] == 0.0
 
