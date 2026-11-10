@@ -309,6 +309,32 @@ def test_a_picture_that_stops_asking_for_a_colourbar_gives_the_room_back():
     assert not [bar for bar in figure.axes if bar.get_label() == "<colorbar>"]
 
 
+def test_a_colourbar_is_as_tall_as_the_picture_and_no_wider_than_a_share_of_it():
+    """A bar sized by the cell stands over a picture that kept the shape it was painted in.  It
+    is a key to that picture, so it is measured against it, cell aside."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(15.6, 8.6))
+    panel = figure.add_subplot(figure.add_gridspec(2, 3)[0, 0])
+    image = pyplot.Plot(payload, ax=panel, colorbar=True)
+    figure.canvas.draw()
+    picture = image.get_window_extent().transformed(figure.transFigure.inverted())
+    bar = [axes for axes in figure.axes if axes.get_label() == "<colorbar>"][0].get_position()
+    assert bar.height == pytest.approx(picture.height, rel=0.02)
+    assert bar.width <= pyplot.BAR_SHARE * picture.width
+    assert bar.width >= picture.width / 40        # thinner than that and it is a line, not a key
+
+
+def test_the_room_named_for_a_colourbar_is_the_room_it_gets():
+    """The layer sizes a bar nobody named room for; a caller who names it is not overruled."""
+    payload = gtdata.render_data_of("dims/surface_scalar")
+    figure = mpl.figure(figsize=(8.0, 4.0))
+    panel = figure.add_subplot(figure.add_gridspec(1, 2)[0, 0])
+    bar = pyplot.colorbar(pyplot.Plot(payload, ax=panel), shrink=1.0)
+    figure.canvas.draw()
+    assert bar.ax.get_position().height == pytest.approx(
+        panel.get_subplotspec().get_position(figure).height, rel=0.02)
+
+
 @pytest.mark.parametrize("name", ["numberspace", "line_scalar", "volume_scalar"])
 def test_a_payload_that_carries_no_hope_of_a_range_still_plots(name):
     """A constant field and a line have no colour range; they plot flat rather than fail."""
