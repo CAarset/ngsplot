@@ -1,11 +1,13 @@
 """Plotting that looks like NGSolve's Draw and reads like pyplot.
 
-This is the layer a script or a notebook calls.  It paints nothing: it decides what it was
-handed, asks ngsolve for the payload ``Draw`` would have sent (see :mod:`ngsplot._ngsolve`),
-asks :func:`ngsplot.scene.paint` for the pixels that payload paints, and lays those pixels on a
-canvas matplotlib commands.  From there matplotlib owns the figure, so a title, a colourbar, a
-second subplot, a ``savefig`` into a video and a widget in a notebook all work the way they
-already do, and nothing about the picture has to be relearned.
+This is the layer a script or a notebook calls, and it has one command: :func:`Plot`, the
+counterpart of ``ngsolve.webgui.Draw``, importable from the package itself as
+``from ngsplot import Plot``.  It paints nothing: it decides what it was handed, asks ngsolve for
+the payload ``Draw`` would have sent (see :mod:`ngsplot._ngsolve`), asks
+:func:`ngsplot.scene.paint` for the pixels that payload paints, and lays those pixels on an axis.
+From there matplotlib owns the figure, so a title, a colourbar, a second subplot, a ``savefig``
+into a video and a widget in a notebook all work the way they already do, and nothing about the
+picture has to be relearned.
 
 What a picture is here: one :class:`~matplotlib.image.AxesImage` whose array is the renderer's
 array, byte for byte, drawn with ``interpolation="nearest"`` because it is a finished raster and
@@ -134,14 +136,19 @@ def savefig(*args, **kwargs):
     return gcf().savefig(*args, **kwargs)
 
 
-def plot(obj, ax=None, *, mesh=None, colorbar=False, width=WIDTH, height=HEIGHT,
+def Plot(obj=None, ax=None, *, mesh=None, colorbar=False, width=WIDTH, height=HEIGHT,
          eval=None, **kwargs):
     """Draw an NGSolve object, or a payload of one, as an image on an axis.
+
+    The counterpart of ``ngsolve.webgui.Draw``, without the window: what ``Draw`` would have put
+    in front of you is painted here and handed over as a matplotlib picture.
 
     ``obj`` is a ``GridFunction``, a ``Mesh``, a ``CoefficientFunction``, or the payload of any
     of them -- what :func:`ngsplot._ngsolve.render_data` returns, which is also what a saved
     ``render_data`` of a page holds.  A ``CoefficientFunction`` belongs to no mesh, so it is
-    drawn on the one given as ``mesh``, and hears from ngsolve when that was left out.
+    drawn on the one given as ``mesh``, and hears from ngsolve when that was left out.  A
+    ``Mesh`` needs no second argument either way, so ``Plot(mesh)`` and ``Plot(mesh=mesh)`` are
+    both the mesh on its own, as ``Draw(mesh)`` is.
 
     ``width`` and ``height`` are pixels of the picture, not inches of paper: the renderer paints
     a raster and matplotlib is told how big it is, which is what keeps a savefig at one figure
@@ -157,6 +164,11 @@ def plot(obj, ax=None, *, mesh=None, colorbar=False, width=WIDTH, height=HEIGHT,
     needs; titles, labels and colourbars are left to whoever made them.
     """
     width, height = int(width), int(height)
+    if obj is None:
+        obj, mesh = mesh, None  # a mesh under its own name is what to draw, as it is for Draw
+    if obj is None:
+        raise TypeError("Plot needs something to draw: a GridFunction, a CoefficientFunction "
+                        "with mesh=, a Mesh, or the payload of one")
     payload, renderer = _split(obj, mesh, kwargs)
     if eval is not None:
         if "function_mode" in renderer:
@@ -207,7 +219,7 @@ def colorbar(image=None, **kwargs):
     return bar
 
 
-#: ``plot(colorbar=True)`` reaches the function above under this name, its own keyword shadowing it
+#: ``Plot(colorbar=True)`` reaches the function above under this name, its own keyword shadowing it
 _colorbar = colorbar
 
 
@@ -292,6 +304,6 @@ def _last_plotted():
     """The last picture plotted here, while someone still holds it."""
     image = None if _state["last"] is None else _state["last"]()
     if image is None:
-        raise TypeError("nothing has been plotted here yet; plot() hands back the picture "
+        raise TypeError("nothing has been plotted here yet; Plot() hands back the picture "
                         "colourbar() takes")
     return image

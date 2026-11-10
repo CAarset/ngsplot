@@ -17,21 +17,24 @@ pip install -e .            # add [test] for pytest, [gt] for the ground truth h
 ## Usage
 
 ```python
-from ngsplot import pyplot
+from ngsplot import Plot          # the counterpart of ngsolve.webgui.Draw
+from ngsplot import pyplot        # the figure around it: colorbar, savefig, gca, cla, close
 
-pyplot.plot(gfu, colorbar=True)                     # a GridFunction, as Draw draws it
-pyplot.plot(cf, mesh=mesh)                          # a CoefficientFunction needs its mesh
-pyplot.plot(gfu, vmin=0, vmax=1, ncolors=16)        # the panel's own min, max and bands
-pyplot.plot(gfu, cmap="viridis", wireframe=False)   # any matplotlib name, or a webgui ramp
-pyplot.plot(gfu, line_width=1, edges=False)         # the lines, thinner or gone
-pyplot.plot(gfu, euler_angles=(20, 30, 0))          # the view the panel drags
-pyplot.plot(gfu, deformation=0.7)                   # the deformation slider, by amount
-pyplot.plot(gfc, eval="imag")                       # which part of a complex value to colour
+Plot(gfu, colorbar=True)                        # a GridFunction, as Draw draws it
+Plot(mesh)                                      # the mesh alone, as Draw(mesh) draws it
+Plot(cf, mesh=mesh)                             # a CoefficientFunction needs its mesh
+Plot(mesh=mesh)                                 # spelled either way, like Draw
+Plot(gfu, vmin=0, vmax=1, ncolors=16)           # the panel's own min, max and bands
+Plot(gfu, cmap="viridis", wireframe=False)      # any matplotlib name, or a webgui ramp
+Plot(gfu, line_width=1, edges=False)            # the lines, thinner or gone
+Plot(gfu, euler_angles=(20, 30, 0))             # the view the panel drags
+Plot(gfu, deformation=0.7)                      # the deformation slider, by amount
+Plot(gfc, eval="imag")                          # which part of a complex value to colour
 pyplot.savefig("frame.png")
 ```
 
 A picture is one `AxesImage` holding the renderer's own array, laid on an axis that covers the
-figure, so everything matplotlib does from there still works: `plot(gfu, ax=ax)` into anybody's
+figure, so everything matplotlib does from there still works: `Plot(gfu, ax=ax)` into anybody's
 `subplots` or `gridspec`, `pyplot.colorbar` on the last picture or a given one, `cla()` and
 `close()`, and a savefig at the figure's own dpi that reproduces the rendered array byte for
 byte, which is what makes a loop of frames an animation.
@@ -40,14 +43,14 @@ byte, which is what makes a loop of frames an animation.
 from matplotlib import pyplot as mpl
 
 fig, axes = mpl.subplots(1, 2, figsize=(9, 3.4))
-pyplot.plot(u, ax=axes[0], colorbar=True)
-pyplot.plot(v, ax=axes[1], cmap="viridis", ncolors=16)
+pyplot.Plot(u, ax=axes[0], colorbar=True)
+pyplot.Plot(v, ax=axes[1], cmap="viridis", ncolors=16)
 axes[0].set_title("u")
 ```
 
 Keywords are sorted by who reads them: the ones `ngsplot.scene.paint` and `ngsplot.camera.Camera`
-take go to the painter, the rest go to `Draw`, so `order`, `draw_vol`, `objects` and `settings`
-keep their meaning. A payload built earlier by `ngsplot._ngsolve.render_data` may be plotted
+take go to the painter, the rest go to `Draw`, so `order`, `draw_vol` and `settings` keep their
+meaning. A payload built earlier by `ngsplot._ngsolve.render_data` may be plotted
 directly, and refuses the keywords that would have shaped it instead of ignoring them.
 
 ## Status
