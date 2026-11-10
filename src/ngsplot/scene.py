@@ -119,15 +119,19 @@ def settings_of(render_data, *, is_complex=None):
     scale = float(render_data.get("deformation_scale") or 1.0)
     out["deformation"] = scale if render_data.get("deformation") else 0.0
 
-    # `eval` picks which part of a value to draw: x, y, z, length, real, imaginary.  A
-    # complex function draws its real part and a vector its length, both as the panel does
-    # (gui.ts:530-563); a payload may say `eval` outright, which outranks the panel.
+    # `eval` picks which part of a value to draw: x, y, z, length, real, imaginary.  A complex
+    # function draws its real part and a vector its length, both as the panel does
+    # (gui.ts:529-571), and for those two the panel writes that mode over whatever the payload
+    # named in its Colormap section.  A scalar lets the mode it named stand, and an `eval` at
+    # the top of the payload is written last of all (gui.ts:568-571).  A flat `eval` beside the
+    # sections is not one of the names updateSettings folds, so nothing reads it.
     funcdim = int(render_data.get("funcdim", 1))
     if is_complex is None:
         is_complex = render_data.get("is_complex", False)
     is_complex = bool(is_complex)
     mode = 5.0 if is_complex else (3.0 if funcdim in (2, 3) else 0.0)
-    mode = settings.get("eval", mode)
+    if not is_complex and funcdim not in (2, 3):
+        mode = colormap_section.get("eval", mode)
     mode = render_data.get("eval", mode)
     out["function_mode"] = float(mode)
 

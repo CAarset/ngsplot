@@ -276,12 +276,16 @@ def test_a_payload_without_a_range_is_spread_over_the_unit_interval():
 
 
 def test_which_part_of_a_value_is_drawn_is_the_panels_choice():
-    """``gui.ts:530-563``: a complex value by its real part, a vector by its length.
+    """``gui.ts:529-571``: a complex value by its real part, a vector by its length.
 
     ``BuildRenderData`` splits a complex function into two components and writes
     ``is_complex`` next to them (``ngsolve/webgui.py:303-305``), so the payload carries the
-    distinction itself; the keyword is for a pair that came without it.  A payload that
-    says ``eval`` outright, as the page lets a ``Draw(eval=...)`` do, outranks both.
+    distinction itself; the keyword is for a pair that came without it.  An ``eval`` at the
+    top of the payload outranks both, since ``initComplex`` writes it once the panel is
+    built (``gui.ts:568-571``).  A ``Colormap`` section that names a mode of its own is
+    written *over* by the mode chosen for a complex or multi-component value, and so stands
+    only for a scalar; and a flat ``eval`` beside the sections is a name the page never
+    folds (``gui.ts:145-175``), which is to say it means nothing.
     """
     assert scene.settings_of({"funcdim": 1})["function_mode"] == 0.0
     assert scene.settings_of({"funcdim": 2})["function_mode"] == 3.0
@@ -291,7 +295,14 @@ def test_which_part_of_a_value_is_drawn_is_the_panels_choice():
     assert scene.settings_of({"funcdim": 2}, is_complex=True)["function_mode"] == 5.0
     assert scene.settings_of({"funcdim": 2, "is_complex": True}, is_complex=False)["function_mode"] == 3.0
     assert scene.settings_of({"funcdim": 2, "eval": 1})["function_mode"] == 1.0
-    assert scene.settings_of({"funcdim": 2, "gui_settings": {"eval": 0}})["function_mode"] == 0.0
+    assert scene.settings_of({"funcdim": 1, "gui_settings": {"Colormap": {"eval": 1}}})["function_mode"] == 1.0
+    assert scene.settings_of({"funcdim": 2, "gui_settings": {"Colormap": {"eval": 1}}})["function_mode"] == 3.0
+    assert scene.settings_of(
+        {"funcdim": 2, "is_complex": True, "gui_settings": {"Colormap": {"eval": 6}}})["function_mode"] == 5.0
+    assert scene.settings_of({"funcdim": 1, "eval": 2,
+                              "gui_settings": {"Colormap": {"eval": 1}}})["function_mode"] == 2.0
+    assert scene.settings_of({"funcdim": 2, "gui_settings": {"eval": 0}})["function_mode"] == 3.0
+    assert scene.settings_of({"funcdim": 1, "gui_settings": {"eval": 1}})["function_mode"] == 0.0
 
 
 def test_a_missing_field_is_the_unit_interval_too():
