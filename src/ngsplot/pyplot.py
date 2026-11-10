@@ -82,7 +82,7 @@ _PARTS = {"x": 0.0, "y": 1.0, "z": 2.0, "norm": 3.0, "length": 3.0, "abs": 3.0,
 _bare_axes = weakref.WeakSet()
 _pictures = weakref.WeakKeyDictionary()   # AxesImage -> the texture and ends it was painted with
 _plotted = weakref.WeakKeyDictionary()    # Axes -> the pictures it is holding
-_bars = weakref.WeakKeyDictionary()       # Axes -> the colourbars standing next to it
+_bars = weakref.WeakKeyDictionary()       # Axes -> the bar standing next to it, and what built it
 _state = {"last": None}                   # the last picture plotted, as a weakref
 
 
@@ -196,7 +196,7 @@ def Plot(obj=None, ax=None, *, mesh=None, colorbar=False, width=WIDTH, height=HE
     axes = gca() if ax is None else ax
     if axes not in _bare_axes:
         axes.set_axis_off()  # a picture needs no rulers in pixels; set_axis_on puts them back
-    _retire(axes)
+    _retire(axes, keep_bar=colorbar)
     image = axes.imshow(canvas.to_uint8(), extent=(0.0, float(width), float(height), 0.0),
                         origin="upper", interpolation="nearest")
     _plotted.setdefault(axes, []).append(image)
@@ -219,6 +219,12 @@ def colorbar(image=None, **kwargs):
 
     With no argument it takes the last picture plotted here.  ``mesh`` has no colours to put a
     bar against and says so.
+
+    One bar stands beside an axis.  A repaint hands that bar the bands and the ends of the new
+    picture rather than building another one and carving the room for it out again, so a time
+    loop keeps the bar it was handed and the picture keeps the room it gave up once.  The bar
+    goes when a picture is plotted without asking for one, or when it is asked for in other
+    words -- a bar built with ticks of its own is not talked into a different kind of bar.
     """
     image = _last_plotted() if image is None else image
     picture = _pictures.get(image)
@@ -228,11 +234,28 @@ def colorbar(image=None, **kwargs):
     if len(pal) < 2:
         raise ValueError("a mesh-only draw is painted one colour and has no scale to show")
     boundaries = np.linspace(picture["low"], picture["high"], len(pal) + 1)
-    mappable = ScalarMappable(cmap=_colormap.to_matplotlib(pal),
-                              norm=mcolors.BoundaryNorm(boundaries, len(pal)))
+    cmap = _colormap.to_matplotlib(pal)
+    norm = mcolors.BoundaryNorm(boundaries, len(pal))
+    standing = _bars.get(image.axes)
+    reuse = standing is not None and _stands(standing["bar"]) and _same_ask(standing["kwargs"],
+                                                                           kwargs)
+    if reuse:
+        # matplotlib's own way of telling a bar that what it keys has changed: the mappable keeps
+        # its place in the bar, and the bar reads the ramp and the scale off it and redraws
+        mappable = standing["mappable"]
+        mappable.set_cmap(cmap)
+        mappable.set_norm(norm)
+        standing["bar"].update_normal(mappable)
+        return standing["bar"]
+    if standing is not None and _stands(standing["bar"]):
+        standing["bar"].remove()  # the room comes back before the new bar takes it
+    mappable = ScalarMappable(cmap=cmap, norm=norm)
     mappable.set_array([])
+    # a bar hands the room it took back to the axis it reads off its mappable; a private mappable
+    # has no axis of its own unless we give it the one the picture sits in
+    mappable.axes = image.axes
     bar = image.axes.get_figure().colorbar(mappable, ax=image.axes, **kwargs)
-    _bars.setdefault(image.axes, []).append(bar)
+    _bars[image.axes] = {"bar": bar, "mappable": mappable, "kwargs": kwargs}
     return bar
 
 
@@ -307,14 +330,36 @@ def _bare(axes):
     return axes
 
 
-def _retire(axes):
-    """Take the picture off an axis, and any bar that was standing beside it."""
+def _retire(axes, keep_bar=False):
+    """Take the picture off an axis, and the bar beside it unless the next one will use it."""
     for image in _plotted.get(axes, ()):
         image.remove()
-    for bar in _bars.get(axes, ()):
-        bar.remove()
+    if not keep_bar:
+        standing = _bars.pop(axes, None)
+        if standing is not None and _stands(standing["bar"]):
+            standing["bar"].remove()
     _plotted[axes] = []
-    _bars[axes] = []
+
+
+def _stands(bar):
+    """Is this bar still installed in a figure?  Someone may have taken it away behind us.
+
+    ``bar.ax.get_figure()`` keeps answering with the figure it came from after the bar is gone,
+    so only the figure's own list says whether the bar is in it -- and a bar taken twice raises
+    out of matplotlib's ``delaxes`` rather than doing nothing.
+    """
+    figure = bar.ax.get_figure()
+    return figure is not None and bar.ax in figure.axes
+
+
+def _same_ask(had, wants):
+    """Was the bar standing asked for in the same words as this one would have been?
+
+    Told by what the keywords spell: a bar built with ticks, a formatter or its own ``cax``
+    cannot be talked into the different kind of bar those other words ask for, so a differently
+    asked-for bar is built again and the room goes with the old one.
+    """
+    return repr(had) == repr(wants)
 
 
 def _last_plotted():
