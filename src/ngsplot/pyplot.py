@@ -310,11 +310,16 @@ def colorbar(image=None, **kwargs):
         if live:
             _take_down(image.axes, standing)  # the room comes back before the new bar takes it
         cax = kwargs.get("cax")
-        if cax is not None and cax.get_figure() is figure and cax not in figure.axes:
+        if cax is not None and cax not in figure.axes:
             # the place the last bar stood in, asked for again in other words: the caller's
-            # axis went with that bar, and comes back empty for this one
-            cax.cla()
-            figure.add_axes(cax)
+            # axis went with that bar, and comes back empty for this one.  matplotlib before
+            # 3.11 forgets the figure of an axis it takes out, so the one this layer took out
+            # with its own bar is told its figure again
+            if cax.get_figure() is None and live and standing["kwargs"].get("cax") is cax:
+                cax.set_figure(figure)
+            if cax.get_figure() is figure:
+                cax.cla()
+                figure.add_axes(cax)
         mappable = ScalarMappable(cmap=cmap, norm=norm)
         mappable.set_array([])
         room = None

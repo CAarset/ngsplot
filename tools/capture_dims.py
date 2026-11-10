@@ -325,10 +325,13 @@ def capture(name):
         meta["render_error"] = traceback.format_exc()
     with open(sidecar, "w") as f:
         json.dump(meta, f, indent=1, default=str)
-    print(f"{name}: ok, objects={[(o['name'], o['visible'], o['draw_range'], o['instance_count']) for o in meta.get('render_objects', [])]}, "
+    objects = [(o["name"], o["visible"], o["draw_range"], o["instance_count"])
+               for o in meta.get("render_objects", [])]
+    ends = [round(v, 3) if isinstance(v, float) else v
+            for v in (meta.get("colormap_min", [None]), meta.get("colormap_max", [None]))]
+    print(f"{name}: ok, objects={objects}, "
           f"png std={meta.get('png_stats', {}).get('std_all')}, "
-          f"cmap={[round(v, 3) if isinstance(v, float) else v for v in
-                    (meta.get('colormap_min', [None]), meta.get('colormap_max', [None]))]}")
+          f"cmap={ends}")
 
 
 if __name__ == "__main__":
