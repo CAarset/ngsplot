@@ -69,4 +69,52 @@ def render_data(obj, *args, **kwargs):
     scene.obj, scene.args, scene.kwargs = obj, args, options
     scene.encoding = "b64"  # what WebGLScene.__init__ sets, and what the page decodes
     scene.widget = None
-    return scene.GetData()
+    payload = scene.GetData()
+    sides = _edge_sides(obj, args, payload)
+    if sides is not None:
+        payload["ngsplot_edge_sides"] = sides
+    return payload
+
+
+def _edge_sides(obj, args, payload):
+    """How many elements lie beside each thick edge of a 2D payload, or ``None``.
+
+    The thick lines of a 2D picture are the boundary segments of the mesh, one curve per
+    segment in the mesh's own order (``MapToAllElements`` over ``BND``,
+    ``ngsolve/webgui.py:419-431``), and the page draws the outer boundary and the lines between
+    subdomains alike, since a segment carries no word of what lies beside it.  The mesh does: a
+    segment between two subdomains is an edge of two elements, one on the outer boundary is an
+    edge of one.  That count rides along under a key of ngsplot's own, which the page ignores,
+    so that ``scene.paint(subdomains=False)`` can tell the two apart from the payload alone.
+
+    The count is only given where it provably belongs to the curves it is given for: the mesh is
+    found the way ``Draw`` finds it, and every curve has to start and end on the corners of the
+    segment of its row.  A region drawn on its own, a 3D mesh or a mesh that cannot be found gets
+    no count, and a picture painted from that payload says so when it is asked to tell.
+    """
+    import numpy as np
+    import ngsolve as ngs
+
+    from . import geometry
+
+    if payload.get("mesh_dim") != 2 or not payload.get("edges"):
+        return None
+    mesh = obj if isinstance(obj, ngs.Mesh) else getattr(getattr(obj, "space", None), "mesh", None)
+    if mesh is None and args and isinstance(args[0], ngs.Mesh):
+        mesh = args[0]
+    if mesh is None:
+        return None
+    segments = list(mesh.Elements(ngs.BND))
+    ends = geometry.edge_points(payload)[0][:, [0, -1], :2].astype(np.float64)
+    if len(segments) != len(ends):
+        return None
+    corners = np.array([[mesh[v].point[:2] for v in segment.vertices] for segment in segments])
+    if corners.shape != ends.shape:
+        return None
+    # the payload's coordinates are float32, so the corners are found to a float32's precision
+    tolerance = 1e-5 * (1.0 + np.abs(corners).max())
+    aligned = (np.abs(ends - corners).max(axis=(1, 2)) <= tolerance) | (
+        np.abs(ends[:, ::-1] - corners).max(axis=(1, 2)) <= tolerance)
+    if not aligned.all():
+        return None
+    return [len(mesh[segment.edges[0]].elements) for segment in segments]

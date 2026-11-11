@@ -55,7 +55,14 @@ MESH_GREY = 0.7
 #: 1/0, so it is out; the rotated grid puts its samples at +-0.125 and +-0.375 and lands
 #: one inside the 1-pixel-wide strip and three in the next column, for exactly the pair
 #: the picture shows, over a window of +-0.12 px around the projected position.
-MSAA_4X = ((-0.375, -0.125), (-0.125, -0.375), (0.125, 0.375), (0.375, 0.125))
+#:
+#: A vertical line reads the four x offsets only, and a horizontal one the four y offsets,
+#: so neither tells the rotated grid from its mirror image; a diagonal line does.  This is
+#: the standard 4x pattern of Vulkan and Direct3D -- (0.375, 0.125), (0.875, 0.375),
+#: (0.125, 0.625), (0.625, 0.875) from the pixel's corner -- turned upside down by GL's
+#: rows counting from the bottom.  Counted in samples per pixel, the wireframe of the recorded
+#: pictures matches it in 95% of the pixels a line touches, against 54% for the mirror image.
+MSAA_4X = ((-0.375, -0.125), (-0.125, 0.375), (0.125, -0.375), (0.375, 0.125))
 
 #: the two window depths closest together that a depth buffer can tell apart -- the ``r``
 #: of the polygon-offset formula.  ``gl.polygonOffset`` measures the offset in units of it,
@@ -188,8 +195,17 @@ class Canvas:
         return np.where(count > 0, total / np.maximum(count, 1), np.inf)
 
     def to_uint8(self):
-        """The resolved image as RGBA bytes, clamped and rounded like the framebuffer."""
-        return np.rint(np.clip(self.color, 0.0, 1.0) * 255.0).astype(np.uint8)
+        """The resolved image as RGBA bytes, rounded the way the framebuffer rounds it.
+
+        A multisampled framebuffer of 8-bit colour stores every sample as a byte, rounded
+        to the nearest, and the resolve averages those bytes and rounds again, a half going
+        up.  Averaging the exact colours and rounding once is a level out wherever the
+        samples of a pixel differ -- along every line and every silhouette -- and measured
+        against the recorded pictures, the framebuffer's order agrees with a further fifth
+        of those pixels.
+        """
+        stored = np.rint(np.clip(self.planes, 0.0, 1.0) * 255.0)
+        return np.floor(stored.mean(axis=0) + 0.5).astype(np.uint8)
 
 
 def deformation_mode(mesh_dim, funcdim, is_complex=False):

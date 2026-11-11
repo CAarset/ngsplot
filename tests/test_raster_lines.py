@@ -278,11 +278,13 @@ def test_the_strip_has_no_joins_where_two_curves_meet():
     # outside quadrant of the corner keeps the white of the background, where a miter would
     # have painted.  The two strips are 2.5 pixels wide about the corner at (300.5, 200.5),
     # one running up the screen and one in from the left, and the pixels beside the corner
-    # keep only the half that lies behind the end of the strip that owns them.  The pixel
-    # the corner itself falls in is covered by both strips, but the rotated sample grid puts
-    # its two negative offsets in x and y together, so both rails keep the very same two
-    # samples and the pixel stays at half -- which is still half short of what a join would
-    # have made of it.
+    # keep only the samples that lie behind the end of the strip that owns them: above the
+    # corner the two with a negative y offset inside the upright strip, a half, and left of
+    # it the one sample with a negative x offset that is also inside the far rail of the
+    # flat strip, a quarter.  The pixel the corner itself falls in is covered by both
+    # strips, each through its own pair of samples, and the rotated grid shares one sample
+    # between the pairs: three of the four, the one with both offsets positive left white
+    # -- a sample short of what a join would have made of it.
     canvas, cam = canvas_for(), camera_for()
     corner = np.array([x_for_col(cam, 300.5), y_for_row(cam, 200.5), 0.0])
     ctrl = np.concatenate([
@@ -293,8 +295,8 @@ def test_the_strip_has_no_joins_where_two_curves_meet():
     cover = 1.0 - canvas.color[:, :, 0]
     assert cover[201, 301] == 0.0, "a join filled the outside of the corner"
     assert np.isclose(cover[200, 301], 0.5), "the up-going strip did not stop at its own end"
-    assert np.isclose(cover[201, 300], 0.5), "the incoming strip did not stop at its own end"
-    assert np.isclose(cover[200, 300], 0.5), "the inside of the corner is overpainted"
+    assert np.isclose(cover[201, 300], 0.25), "the incoming strip did not stop at its own end"
+    assert np.isclose(cover[200, 300], 0.75), "the inside of the corner is overpainted"
 
 
 BENT = np.array([[[-0.3, -0.1, 0.0, 0.0], [0.0, 0.25, 0.0, 0.0], [0.0, 0.25, 0.0, 0.0],

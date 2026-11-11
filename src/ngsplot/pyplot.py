@@ -22,8 +22,9 @@ The keywords are split by what they are for, and the rule is one line long:
 
 * the keywords of :func:`ngsplot.scene.paint` and of :class:`ngsplot.camera.Camera` go to the
   painter -- ``vmin``, ``vmax``, ``autoscale``, ``cmap``, ``ncolors``, ``n_segments``,
-  ``line_width``, ``surface``, ``wireframe``, ``edges``, ``function_mode``, ``complex_scale``,
-  ``dark_backside``, ``is_complex``, ``elev``, ``azim``, ``roll``, ``transformations``, ...
+  ``line_width``, ``surface``, ``wireframe``, ``edges``, ``subdomains``, ``function_mode``,
+  ``complex_scale``, ``dark_backside``, ``is_complex``, ``elev``, ``azim``, ``roll``,
+  ``transformations``, ...
 * everything else goes to ``Draw``, so the keywords that shape the payload -- ``order``,
   ``draw_vol``, ``draw_surf``, ``settings``, ``scale``, ``nodal_p1`` -- keep their
   meaning, and a payload that was already built refuses them with a named error instead.

@@ -474,6 +474,15 @@ def test_a_side_left_to_the_box_is_the_box_and_a_margin():
     assert width == pytest.approx(height, abs=2)
 
 
+def test_subdomains_need_a_payload_that_says_where_they_meet():
+    """Which thick line lies between subdomains is the mesh's to know, and a payload recorded
+    from a page carries no word of it; asking it to tell is answered, not guessed."""
+    payload = gtdata.render_data_of("square_scalar")
+    with pytest.raises(ValueError, match="subdomains"):
+        scene.paint(payload, width=90, height=60, subdomains=False)
+    assert scene.paint(payload, width=90, height=60, subdomains=False, edges=False) is not None
+
+
 def test_a_framing_nobody_knows_is_refused():
     payload = gtdata.render_data_of("dims/surface_scalar")
     with pytest.raises(ValueError, match="sphere"):

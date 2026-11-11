@@ -70,9 +70,11 @@ def differs(mine, recorded):
 
 @pytest.mark.parametrize("name", SCENES)
 def test_the_seam_builds_the_payload_the_recording_was_drawn_from(name):
-    """No widget, no browser: the payload of ``Draw`` again, byte for byte."""
+    """No widget, no browser: the payload of ``Draw`` again, byte for byte, beside the keys of
+    ngsplot's own it adds (``ngsplot_...``), which the page never reads."""
     obj, args, keywords = capture_dims.SCENES[name]()
-    mine = _ngsolve.render_data(obj, *args, **keywords)
+    mine = {key: value for key, value in _ngsolve.render_data(obj, *args, **keywords).items()
+            if not key.startswith("ngsplot_")}
     assert differs(mine, capture_dims.draw(name)) == {}
     assert differs(mine, gtdata.render_data_of("dims/" + name)) == {}
 
@@ -245,7 +247,9 @@ def test_a_payload_is_built_without_a_widget(monkeypatch):
     # and it is the payload Draw hands its widget, keywords and defaults landed where they go
     drawn = netgen_webgui.Draw(gfu, show=False, min=0.0, max=2.0).widget.value
     assert len(built) == 1, "Draw itself still builds one, which is what was counted"
-    assert as_json(payload) == as_json(drawn)
+    # ngsplot's own keys aside, which the page never reads
+    ours = {key: value for key, value in payload.items() if not key.startswith("ngsplot_")}
+    assert as_json(ours) == as_json(drawn)
 
 
 def test_what_draw_would_do_with_a_page_is_refused_rather_than_ignored():
@@ -303,3 +307,58 @@ def test_a_run_of_plots_leaves_no_widget_registered():
     for _ in range(5):
         _ngsolve.render_data(gfu)
     assert registered() == before, "a payload per call, and a widget the kernel carries per call"
+
+
+# --------------------------------------------------------------- the lines between subdomains
+
+def two_subdomains():
+    """A rectangle with a disc inside it as a second subdomain, and a field over both."""
+    from netgen.geom2d import SplineGeometry
+
+    geo = SplineGeometry()
+    geo.AddRectangle((0, 0), (2, 1), bcs=["bottom", "right", "top", "left"],
+                     leftdomain=1, rightdomain=0)
+    geo.AddCircle((0.6, 0.5), r=0.25, leftdomain=2, rightdomain=1, bc="interface")
+    geo.SetMaterial(1, "outer")
+    geo.SetMaterial(2, "inner")
+    mesh = ngs.Mesh(geo.GenerateMesh(maxh=0.1))
+    mesh.Curve(3)
+    gfu = ngs.GridFunction(ngs.H1(mesh, order=3))
+    gfu.Set(ngs.sin(3 * ngs.x) * ngs.y)
+    return mesh, gfu
+
+
+def test_the_payload_says_which_thick_lines_lie_between_subdomains():
+    """The page draws every boundary segment alike; the mesh knows which ones have an element on
+    either side, and the seam writes that down, a count per thick edge in the payload's order."""
+    mesh, gfu = two_subdomains()
+    names = [segment.mat for segment in mesh.Elements(ngs.BND)]
+    for payload in (_ngsolve.render_data(mesh), _ngsolve.render_data(gfu),
+                    _ngsolve.render_data(ngs.x, mesh)):
+        sides = payload["ngsplot_edge_sides"]
+        assert [count == 2 for count in sides] == [name == "interface" for name in names]
+    # a region drawn on its own sends part of the boundary, and no count it cannot vouch for
+    alone = _ngsolve.render_data(gfu, mesh.Materials("inner"))
+    assert len(geometry.edge_points(alone)[0]) < len(names)
+    assert "ngsplot_edge_sides" not in alone
+
+
+def test_subdomains_false_drops_the_lines_between_and_keeps_the_outline():
+    mesh, gfu = two_subdomains()
+    payload = _ngsolve.render_data(gfu)
+    kw = dict(width=480, height=240, wireframe=False)
+    full = scene.paint(payload, **kw)
+    outer = scene.paint(payload, subdomains=False, **kw)
+
+    def ink(canvas):
+        return (canvas.to_uint8()[..., :3] < 60).all(axis=2)
+
+    # the disc of the inner subdomain, a few pixels wider than its own outline
+    view = scene.frame(payload, **{k: v for k, v in kw.items() if k != "wireframe"})
+    (cx, cy, _, _), (rx, _, _, _) = view.project([[0.6, 0.5, 0.0], [0.85, 0.5, 0.0]])
+    rows, cols = np.mgrid[:240, :480]
+    disc = np.hypot(cols + 0.5 - cx, rows + 0.5 - cy) < (rx - cx) + 4
+    gone = ink(full) & ~ink(outer)
+    assert gone.sum() > 100 and not (gone & ~disc).any(), "only the circle's ink goes"
+    assert np.array_equal(ink(outer) & ~disc, ink(full) & ~disc), "the outline stays as it was"
+    assert not (ink(outer) & disc).any(), "nothing marks the inner subdomain without a wireframe"

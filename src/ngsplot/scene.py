@@ -282,7 +282,7 @@ def frame(render_data, *, width, height, fit=None, n_segments=None, deformation=
 def paint(render_data, *, width=None, height=None, view=None, canvas=None, fit=None,
           vmin=None, vmax=None, autoscale=None, cmap=None, ncolors=None,
           n_segments=None, line_width=None, surface=None, wireframe=None, edges=None,
-          function_mode=None, complex_scale=None, dark_backside=None,
+          subdomains=None, function_mode=None, complex_scale=None, dark_backside=None,
           deformation=None, is_complex=None, **camera_kwargs):
     """Draw ``render_data`` into a :class:`ngsplot.raster.Canvas` and return it.
 
@@ -311,6 +311,12 @@ def paint(render_data, *, width=None, height=None, view=None, canvas=None, fit=N
     change the bands, and ``deformation`` is the amount the geometry is pushed along the
     value, which a payload that says it sent flat geometry needs lifted for the lines as
     much as for the surface.
+
+    ``subdomains=False`` leaves out the thick lines between the subdomains of a 2D mesh and
+    keeps the outer boundary.  The page draws the two alike, and only the mesh knows which is
+    which, so it takes a payload built by :func:`ngsplot.render_data`, which records it; the
+    wireframe, if drawn, still runs along those edges as it runs along every other.
+    ``edges=False`` leaves out every thick line.
 
     ``is_complex`` is taken from the payload, which says so when the function it came from
     was complex; pass it to draw a real/imaginary pair as one complex value, or to ask for
@@ -362,13 +368,27 @@ def paint(render_data, *, width=None, height=None, view=None, canvas=None, fit=N
         edges = settings["edges"]
     width_px = settings["line_width"] if line_width is None else float(line_width)
     if edges and render_data.get("edges"):
-        raster.paint_edges(canvas, view, order, geometry.edge_points(render_data)[0],
+        ctrl = geometry.edge_points(render_data)[0]
+        if subdomains is not None and not subdomains:
+            ctrl = ctrl[_outer_edges(render_data)]
+        raster.paint_edges(canvas, view, order, ctrl,
                            n_segments=n, line_thickness=width_px / canvas.height,
                            deformation=flat, mode=mode)
     if wireframe and render_data.get("Bezier_points"):
         raster.paint_wireframe(canvas, view, order, geometry.wireframe_points(render_data)[0],
                                n_segments=n, deformation=flat, mode=mode)
     return canvas
+
+
+def _outer_edges(render_data):
+    """Which of the thick edges of a payload lie on the outer boundary rather than between two
+    subdomains, by the count of elements beside each that :func:`ngsplot.render_data` records."""
+    sides = render_data.get("ngsplot_edge_sides")
+    if sides is None:
+        raise ValueError("this payload does not say which of its thick lines lie between "
+                         "subdomains; a 2D payload built by ngsplot.render_data does, and "
+                         "edges=False leaves out every thick line")
+    return np.asarray(sides) < 2
 
 
 def _extent(render_data, order, n, lift, flat, mode, function_mode, complex_scale):

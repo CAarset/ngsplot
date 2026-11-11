@@ -579,6 +579,18 @@ def test_to_uint8_clamps_before_it_rounds():
     assert got[0, 1].tolist() == [255, 0, 128, 255]
 
 
+def test_to_uint8_rounds_each_sample_and_then_their_mean_as_the_framebuffer_does():
+    """An 8-bit multisampled framebuffer stores each sample as a byte and resolves the mean of
+    the bytes, a half rounding up; the mean of the exact colours, rounded once, comes out a level
+    apart wherever the samples of a pixel differ."""
+    canvas = canvas_for()
+    canvas.planes[:, 0, 0, 0] = (0.6 / 255, 0.6 / 255, 0.0, 0.0)   # bytes 1, 1, 0, 0
+    canvas.planes[:, 0, 1, 0] = (1 / 255, 0.0, 0.0, 1 / 255)       # a mean of exactly a half
+    got = canvas.to_uint8()
+    assert got[0, 0, 0] == 1, "the mean of the colours, 0.3 of a level, would have rounded to 0"
+    assert got[0, 1, 0] == 1, "a half rounds up, where numpy's rint would have gone to even"
+
+
 def test_a_canvas_needs_a_size_and_some_samples():
     with pytest.raises(ValueError, match="size"):
         raster.Canvas(0, 10)

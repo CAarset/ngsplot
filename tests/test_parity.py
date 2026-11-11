@@ -212,6 +212,25 @@ def test_the_lines_are_the_recorded_lines(scene):
     assert (recorded * grown(ours > LINE_EDGE)).sum() >= 0.95 * recorded.sum()
 
 
+@pytest.mark.parametrize("scene", WIRED)
+def test_a_line_covers_the_samples_the_recorded_line_covers(scene):
+    """Counted in samples, a pixel of line has the ink the page gave it.
+
+    A vertical line reads only the x offsets of the sample grid and a horizontal one only the
+    y offsets, so the rotated grid and its mirror image paint them alike; the diagonals of a
+    mesh are what tell them apart.  The mirror image puts 61 to 66% of these pixels at the
+    recorded number of samples, the grid of :data:`ngsplot.raster.MSAA_4X` 89 to 95%, the rest
+    a sample apart where a line runs within a hair of one.
+    """
+    bare, picture, surface = render(scene, lines=False)
+    canvas, _, _ = render(scene, lines=True)
+    box = central_box(bare)
+    recorded = np.round(ink(picture.astype(float), surface) * 4) * box
+    ours = np.round(ink(levels(canvas), surface) * 4) * box
+    lined = (recorded > 0) | (ours > 0)
+    assert np.mean(recorded[lined] == ours[lined]) > 0.85
+
+
 def test_a_slider_of_five_paints_two_and_a_half_pixels():
     """The known answer for the ``Edges`` outline: half a pixel of 128, then two of black.
 
