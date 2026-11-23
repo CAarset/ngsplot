@@ -30,7 +30,9 @@ DEFAULTS = {
     "surface": True,            # Objects.Surface
     "wireframe": True,          # Objects.Wireframe
     "edges": True,              # Objects.Edges
-    "vectors": False,           # Vectors.show
+    "vectors": False,           # Objects.Vectors: the arrows' box, which a vector field's page adds
+    "vectors_grid_size": 10,    # Vectors.grid_size
+    "vectors_offset": 0.0,      # Vectors.offset
 }
 
 #: ``gui.ts:151-165``: a payload may name a setting flat, at the top of ``gui_settings``.
@@ -103,6 +105,20 @@ def settings_of(render_data, *, is_complex=None):
     out["wireframe"] = bool(objects.get("Wireframe", out["wireframe"]))
     out["edges"] = bool(objects.get("Edges", out["edges"]))
     out["vectors"] = bool(objects.get("Vectors", out["vectors"]))
+    # the Vectors folder, and over it what Draw(vectors={...}) wrote at the top of the payload,
+    # which initVectors puts in after the settings (gui.ts:510-519) -- where it is not 0
+    vectors_section = _section(settings, "Vectors")
+    out["vectors_grid_size"] = int(vectors_section.get("grid_size", out["vectors_grid_size"]))
+    out["vectors_offset"] = float(vectors_section.get("offset", out["vectors_offset"]))
+    if render_data.get("vectors"):
+        if render_data.get("vectors_grid_size"):
+            out["vectors_grid_size"] = int(render_data["vectors_grid_size"])
+        if render_data.get("vectors_offset"):
+            out["vectors_offset"] = float(render_data["vectors_offset"])
+    clipping = _section(settings, "Clipping")
+    out["clipping_normal"] = tuple(float(clipping.get(k, d)) for k, d in (("x", 0.0), ("y", 0.0),
+                                                                          ("z", 1.0)))
+    out["clipping_dist"] = float(clipping.get("dist", 0.0))
 
     # Nothing curved to subdivide, and the page asks for one segment -- but into the
     # defaults, before the payload's settings (gui.ts:229-231), so a payload that named a
@@ -241,8 +257,9 @@ def _placing(render_data, settings, n_segments, deformation, function_mode, comp
     return order, n, lift, flat, mode, function_mode, complex_scale
 
 
-def _frame(render_data, width, height, fit, camera_kwargs, placing):
-    """The camera of :func:`frame`, from the keywords already resolved by :func:`_placing`."""
+def _frame(render_data, width, height, fit, camera_kwargs, placing, arrows=None):
+    """The camera of :func:`frame`, from the keywords already resolved by :func:`_placing`
+    and :func:`_arrows`."""
     if fit not in (None, "sphere", "box"):
         raise ValueError(f"fit frames the bounding 'sphere' of the mesh, as the page does, or "
                          f"the 'box' of what is painted, not {fit!r}")
@@ -254,13 +271,14 @@ def _frame(render_data, width, height, fit, camera_kwargs, placing):
     if fit == "box":
         order, n, lift, flat, mode, function_mode, complex_scale = placing
         view = _box_view(view, _extent(render_data, order, n, lift, flat, mode, function_mode,
-                                       complex_scale),
+                                       complex_scale, arrows),
                          width is None, height is None)
     return view
 
 
 def frame(render_data, *, width, height, fit=None, n_segments=None, deformation=None,
-          function_mode=None, complex_scale=None, is_complex=None, **camera_kwargs):
+          function_mode=None, complex_scale=None, is_complex=None, vectors=None,
+          **camera_kwargs):
     """The camera :func:`paint` would paint ``render_data`` with, and so its canvas, unpainted.
 
     The keywords are those of :func:`paint` that say where the picture lies -- the canvas, the
@@ -268,7 +286,8 @@ def frame(render_data, *, width, height, fit=None, n_segments=None, deformation=
     part of a value that lifts it -- and the answer is the :class:`ngsplot.camera.Camera`, whose
     ``width`` and ``height`` are the canvas.  It is what to ask when a side is left to
     ``fit="box"``: the size of a picture of a long domain, known before it is painted, so that a
-    figure can be laid out around it.  Handed back as ``view=`` to :func:`paint` or
+    figure can be laid out around it.  ``vectors`` counts in for the same reason: an arrow
+    at the edge of the mesh reaches past it.  Handed back as ``view=`` to :func:`paint` or
     :func:`ngsplot.pyplot.Plot`, it paints without framing again -- which a time loop over one
     mesh then does once and not every frame, as long as no deformation moves the mesh between
     the frames.
@@ -276,14 +295,15 @@ def frame(render_data, *, width, height, fit=None, n_segments=None, deformation=
     settings = settings_of(render_data, is_complex=is_complex)
     placing = _placing(render_data, settings, n_segments, deformation, function_mode,
                        complex_scale)
-    return _frame(render_data, width, height, fit, camera_kwargs, placing)
+    return _frame(render_data, width, height, fit, camera_kwargs, placing,
+                  _arrows(render_data, settings, vectors))
 
 
 def paint(render_data, *, width=None, height=None, view=None, canvas=None, fit=None,
           vmin=None, vmax=None, autoscale=None, cmap=None, ncolors=None,
           n_segments=None, line_width=None, surface=None, wireframe=None, edges=None,
           subdomains=None, function_mode=None, complex_scale=None, dark_backside=None,
-          deformation=None, is_complex=None, **camera_kwargs):
+          deformation=None, is_complex=None, vectors=None, **camera_kwargs):
     """Draw ``render_data`` into a :class:`ngsplot.raster.Canvas` and return it.
 
     ``width`` and ``height`` are the drawing buffer, which is the size of the page's
@@ -318,25 +338,29 @@ def paint(render_data, *, width=None, height=None, view=None, canvas=None, fit=N
     wireframe, if drawn, still runs along those edges as it runs along every other.
     ``edges=False`` leaves out every thick line.
 
+    ``vectors`` is the Objects folder's box for the arrows of a vector field
+    (:func:`ngsplot.raster.paint_vectors`): ``True`` ticks it, ``False`` clears it, and a dict
+    ticks it with the Vectors folder's ``grid_size`` and ``offset`` changed; left out, the
+    payload's settings decide, as on the page.  Arrows belong to a real field of two components
+    on a 2D mesh; on a 3D mesh the page draws them only in its clipping plane, which is not
+    painted here.
+
     ``is_complex`` is taken from the payload, which says so when the function it came from
     was complex; pass it to draw a real/imaginary pair as one complex value, or to ask for
     the length of a complex one.  ``complex_scale`` then turns the drawn part by an angle,
     as the phase slider of the panel does.
     """
     settings = settings_of(render_data, is_complex=is_complex)
-    if settings["vectors"]:
-        raise NotImplementedError(
-            "the arrow glyphs of Vectors.show are not painted yet; "
-            "draw them with matplotlib's quiver if a payload asks for them")
     placing = _placing(render_data, settings, n_segments, deformation, function_mode,
                        complex_scale)
+    arrows = _arrows(render_data, settings, vectors)
     order, n, lift, flat, mode, function_mode, complex_scale = placing
     n_colors = settings["ncolors"] if ncolors is None else int(ncolors)
     pal = colormap_of(cmap, n_colors, settings["mesh_only"])
     low, high = view_range(render_data, vmin, vmax, autoscale, function_mode)
 
     if view is None:
-        view = _frame(render_data, width, height, fit, camera_kwargs, placing)
+        view = _frame(render_data, width, height, fit, camera_kwargs, placing, arrows)
     elif camera_kwargs:
         raise TypeError("camera keywords with an explicit view contradict it")
     elif fit == "box":
@@ -377,7 +401,50 @@ def paint(render_data, *, width=None, height=None, view=None, canvas=None, fit=N
     if wireframe and render_data.get("Bezier_points"):
         raster.paint_wireframe(canvas, view, order, geometry.wireframe_points(render_data)[0],
                                n_segments=n, deformation=flat, mode=mode)
+    if arrows is not None:
+        # the page's 'no_clipping' pass, after every object of the default one (scene.ts:803-808)
+        ctrl, vecs = geometry.trig_points(render_data)
+        raster.paint_vectors(
+            canvas, view, order, ctrl, center=render_data["mesh_center"],
+            radius=render_data["mesh_radius"], vmin=low, vmax=high, pal=pal, n_segments=n,
+            vectors=vecs, deformation=lift, mode=mode, function_mode=function_mode,
+            complex_scale=complex_scale,
+            dark_backside=settings["dark_backside"] if dark_backside is None else bool(dark_backside),
+            **arrows)
     return canvas
+
+
+def _arrows(render_data, settings, vectors):
+    """The arrows :func:`paint` draws, as keywords of :func:`ngsplot.raster.paint_vectors`, or
+    ``None``.  The page builds them for a real field of two components on a 2D mesh with its
+    surface sent (``scene.ts:435-440``, ``gui.ts:505-509``) and shows them when the Objects
+    folder's box is ticked; ``vectors`` (see :func:`paint`) ticks or clears it."""
+    shown = settings["vectors"] if vectors is None else bool(vectors)
+    grid_size, offset = settings["vectors_grid_size"], settings["vectors_offset"]
+    if isinstance(vectors, dict):
+        unknown = set(vectors) - {"grid_size", "offset"}
+        if unknown:
+            raise TypeError(f"vectors takes grid_size and offset, not {sorted(unknown)}")
+        grid_size = int(vectors.get("grid_size", grid_size))
+        offset = float(vectors.get("offset", offset))
+        shown = True
+    if not shown:
+        return None
+    funcdim, mesh_dim = int(render_data.get("funcdim", 1)), int(render_data["mesh_dim"])
+    if mesh_dim == 3 and funcdim == 3:
+        if vectors is None:
+            return None
+        raise NotImplementedError("on a 3D mesh the page draws the arrows in its clipping "
+                                  "plane, which is not painted here")
+    if funcdim != 2 or settings["is_complex"] or mesh_dim != 2 or not render_data.get("draw_surf"):
+        if vectors is None:
+            return None  # the page has no arrows to show
+        raise ValueError("arrows belong to a real field of two components on a 2D mesh with "
+                         "its surface; this payload has none")
+    if grid_size < 1:
+        raise ValueError(f"the grid of the arrows needs at least one cell, not {grid_size}")
+    return dict(grid_size=grid_size, offset=offset, clipping_normal=settings["clipping_normal"],
+                clipping_dist=settings["clipping_dist"])
 
 
 def _outer_edges(render_data):
@@ -391,7 +458,7 @@ def _outer_edges(render_data):
     return np.asarray(sides) < 2
 
 
-def _extent(render_data, order, n, lift, flat, mode, function_mode, complex_scale):
+def _extent(render_data, order, n, lift, flat, mode, function_mode, complex_scale, arrows=None):
     """Every point the passes of :func:`paint` put on the canvas, as ``(k, 3)`` mesh points.
 
     The lattice of the surface and the samples of the two line objects, each deformed the way
@@ -411,6 +478,10 @@ def _extent(render_data, order, n, lift, flat, mode, function_mode, complex_scal
             pos, _ = raster.spline_samples(order, points(render_data)[0], n,
                                            deformation=flat, **kw)
             pieces.append(pos.reshape(-1, 3))
+    if arrows is not None and len(ctrl):
+        pieces.append(raster.vector_points(order, ctrl, center=render_data["mesh_center"],
+                                           radius=render_data["mesh_radius"], n_segments=n,
+                                           vectors=vectors, deformation=lift, **kw, **arrows))
     return np.concatenate(pieces) if pieces else np.zeros((0, 3))
 
 

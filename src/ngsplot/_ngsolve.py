@@ -32,7 +32,9 @@ def render_data(obj, *args, **kwargs):
     ``euler_angles``, ``center``, ``radius``, ``settings`` -- and they land where the page reads
     them, so ``scene.settings_of`` and ``scene.view_range`` say of the result what the live
     viewer would have done with it.  ``show`` and ``filename`` are not among them: this draws
-    nothing, and says so rather than ignoring them.
+    nothing, and says so rather than ignoring them.  ``vectors`` is ``Draw``'s too: it sets the
+    grid of the arrows, and the page shows them when the Objects folder's box is ticked
+    (``settings={"Objects": {"Vectors": True}}``), as ``Plot(..., vectors=True)`` does.
 
     No widget is built, which is the point of not calling ``Draw``: ``WebGLScene.__init__``
     constructs a ``WebGuiWidget`` before it looks at ``show`` (``netgen/webgui.py:438``), and

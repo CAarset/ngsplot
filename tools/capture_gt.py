@@ -36,6 +36,16 @@ def _mesh_only():
     return wg.Draw(ngs.Mesh(unit_square.GenerateMesh(maxh=0.2)), show=False).GetData()
 
 
+def _vector_scene(**kwargs):
+    """A rotation about the centre plus a drift, ``(0.8 - y, x - 0.5)``, in VectorH1 order 2 on
+    the unit square, with the Objects folder's Vectors box ticked: the arrow glyphs on."""
+    mesh = ngs.Mesh(unit_square.GenerateMesh(maxh=0.2))
+    gfu = ngs.GridFunction(ngs.VectorH1(mesh, order=2))
+    gfu.Set(ngs.CF((0.8 - ngs.y, ngs.x - 0.5)))
+    return wg.Draw(gfu, mesh, show=False, settings={"Objects": {"Vectors": True}},
+                   **kwargs).GetData()
+
+
 SCENES = {
     # default Draw: order 2, 8 colours, subdivision 5, line thickness 5, white background
     "square_scalar": lambda: _scene(),
@@ -50,6 +60,10 @@ SCENES = {
     "square_no_wireframe": lambda: _scene(
         settings={"Misc": {"line_thickness": 1}, "Objects": {"Wireframe": False}}),
     "mesh_only": _mesh_only,
+    # the arrows of a vector field: the panel's grid of 10, half sunk into the surface ...
+    "vectors": lambda: _vector_scene(),
+    # ... and Draw's own grid size and offset, which lifts them clear of it
+    "vectors_grid": lambda: _vector_scene(vectors={"grid_size": 17, "offset": 0.4}),
 }
 
 _UNIFORMS = """light_dir light_mat dark_backside function_mode deformation complex_scale

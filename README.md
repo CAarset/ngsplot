@@ -56,6 +56,8 @@ Plot(gfu, elev=30, azim=-60, wireframe=False, deformation=0.2)   # viewpoint and
 Plot(gfu, subdomains=False)                                      # no thick lines between subdomains
 Plot(gfc, eval="imag")                                           # plot the imaginary part
 Plot(gfu, fit="box", width=900, height=None)                     # fit the canvas to a long domain
+Plot(gfv, vectors=True)                                          # the viewer's arrows on a vector field
+Plot(gfv, vectors={"grid_size": 20, "offset": 0.5})              # a finer grid of arrows, lifted
 ```
 
 ## Features
@@ -66,6 +68,8 @@ Plot(gfu, fit="box", width=900, height=None)                     # fit the canva
   and `FuncAnimation` work as usual.
 - Meshes, `GridFunction`s and `CoefficientFunction`s on 1D, 2D and 3D meshes, including vector and
   complex fields, `L2` and `NumberSpace`.
+- The viewer's arrow glyphs for a vector field on a 2D mesh (`vectors=True`): one lit cone per
+  cell of its grid, coloured like the field.
 - `fit="box"` fits a long domain to the canvas, wide plots get a horizontal colourbar, and
   `ngsplot.frame` gives the canvas size before anything is drawn.
 - `ngsplot.render_data` builds the plot data without creating a notebook widget, so it can run on

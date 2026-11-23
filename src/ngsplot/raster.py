@@ -263,11 +263,12 @@ def lattice(order, ctrl, *, vectors=None, deformation=0.0, mode="none", function
 
 
 def _fragment_colour(value, normal, pos, inside, *, function_mode, complex_scale,
-                     function_values, vmin, vmax, pal, dark_backside):
+                     function_values, vmin, vmax, pal, dark_backside, side_lights=False):
     """``function.frag``: banded colour of the value, then ``calcLight``.
 
     Modes 4 and 7 take the value straight into the colour, unlit, exactly as the
     fragment program does; anything else colours by the banded value and lights it.
+    ``side_lights`` is the program compiled with ``SIDE_LIGHTS``, as the arrows' is.
     """
     if function_mode == 4.0:
         return value
@@ -279,7 +280,8 @@ def _fragment_colour(value, normal, pos, inside, *, function_mode, complex_scale
     else:
         rgb = np.full(value.shape[:-1] + (3,), MESH_GREY)
     lit = lighting.shade(rgb.reshape(-1, 3), normal.reshape(-1, 3), pos.reshape(-1, 3),
-                         inside=inside, dark_backside=dark_backside)
+                         inside=inside, dark_backside=dark_backside,
+                         **({"side_lights": True} if side_lights else {}))
     return lit.reshape(rgb.shape)
 
 
@@ -1243,3 +1245,263 @@ def paint_wireframe(canvas, cam, order, ctrl, *, n_segments=N_SEGMENTS,
     X, Y, W, Z = _ribbon_triangles(x[keep], y[keep], w[keep], depth[keep], nx[keep], ny[keep],
                                    rails="segment")
     return _paint_stack(canvas, X, Y, W, Z, rgb=rgb, less_equal=less_equal)
+
+
+# ---------------------------------------------------------------------------
+# the arrow glyphs of a vector field (the panel's Vectors)
+# ---------------------------------------------------------------------------
+
+#: ``THREE.ConeGeometry(0.3, 1.5, 10)``, the glyph of one arrow (``mesh.ts``,
+#: ``ClippingVectorsObject``): base radius, height and segments of the cone, which points along +y
+CONE_RADIUS = 0.3
+CONE_HEIGHT = 1.5
+CONE_SEGMENTS = 10
+#: ``gui.ts``: the panel's Vectors folder, an arrow per cell of a ``grid_size`` square grid
+GRID_SIZE = 10
+#: ``quaternion`` in ``shader/utils.h``: below this, the arrow points straight down -y
+_ANTIPARALLEL = 1e-6
+#: The sub-pixel bits of the rasterizer that renders the arrows' values into their texture: a
+#: vertex lands on a grid of 1/16 pixel before coverage and interpolation are worked out, the
+#: least the GLES specification allows (``SUBPIXEL_BITS`` >= 4) and what the recorded pictures
+#: show.  On a canvas the snap moves nothing a picture can tell; on a texture of one pixel per
+#: arrow it moves the sample by up to 1/32 of a cell, enough to carry a value on a colour band's
+#: edge across it -- in ``vectors.png`` the arrows at (6, 1) and (6, 8) of the grid have the same
+#: length, 0.5027, and the page draws one above the band edge at 0.5 and one below it, as the
+#: snapped values 0.5003 and 0.4999 put them.
+TEXTURE_SUBPIXEL_BITS = 4
+
+
+def cone(radius=CONE_RADIUS, height=CONE_HEIGHT, segments=CONE_SEGMENTS):
+    """``THREE.ConeGeometry(radius, height, segments)``: positions ``(v, 3)``, normals ``(v, 3)``
+    and the triangles ``(t, 3)`` in three.js's order.
+
+    It is the ``CylinderGeometry`` of top radius 0: a torso of two rings of ``segments + 1``
+    vertices, the top ring all at the apex ``(0, height / 2, 0)``, with the smooth normals
+    ``normalize(sin θ, radius / height, cos θ)`` on both rings, and a bottom cap that repeats its
+    centre once per segment and the rim again with the cap's normal ``-y``.  The torso's first
+    triangle of every segment has two corners at the apex and no area; the rasterizer draws
+    nothing of it, and it is left out here.
+    """
+    half = height / 2.0
+    theta = np.arange(segments + 1) / segments * (2.0 * np.pi)
+    s, c = np.sin(theta), np.cos(theta)
+    ring = segments + 1
+    side = lighting.normalize(np.stack([s, np.full(ring, radius / height), c], axis=-1))
+    rim = np.stack([radius * s, np.full(ring, -half), radius * c], axis=-1)
+    down = np.array([0.0, -1.0, 0.0])
+    positions = np.concatenate([np.tile([0.0, half, 0.0], (ring, 1)), rim,
+                                np.tile([0.0, -half, 0.0], (segments, 1)), rim])
+    normals = np.concatenate([side, side, np.tile(down, (segments + ring, 1))])
+    k = np.arange(segments)
+    torso = np.stack([ring + k, ring + k + 1, k + 1], axis=-1)
+    centre, edge = 2 * ring, 2 * ring + segments
+    cap = np.stack([edge + k + 1, edge + k, centre + k], axis=-1)
+    return positions, normals, np.concatenate([torso, cap])
+
+
+def arrow_quaternion(v):
+    """``quaternion(vTo)`` of ``shader/utils.h``: the rotation taking ``+y`` to the direction of
+    each row of ``v`` ``(k, 3)``, as ``(k, 4)`` quaternions ``(x, y, z, w)``.  A direction
+    opposite to ``+y`` turns about ``z``, as the shader's special case does."""
+    v = np.asarray(v, dtype=np.float64)
+    r = np.sqrt((v * v).sum(axis=-1)) + v[..., 1]
+    q = np.stack([v[..., 2], np.zeros_like(r), -v[..., 0], r], axis=-1)  # cross(+y, v), r
+    flip = r < _ANTIPARALLEL
+    q[flip] = (0.0, 0.0, 1.0, 0.0)
+    return q / np.sqrt((q * q).sum(axis=-1, keepdims=True))
+
+
+def rotate(v, q):
+    """``rotate(v, q)`` of ``shader/utils.h``: ``v + w t + q x t`` with ``t = 2 q x v``,
+    broadcasting the ``(..., 3)`` vectors against the ``(..., 4)`` quaternions."""
+    qv, qw = q[..., :3], q[..., 3:]
+    t = 2.0 * np.cross(qv, v)
+    return v + qw * t + np.cross(qv, t)
+
+
+def arrow_grid(center, radius, grid_size, normal=(0.0, 0.0, 1.0), dist=0.0):
+    """The plane of the arrows and the two steps of their grid, ``ClippingVectorsObject.
+    updateClippingPlaneCamera``: ``(c, t1, t2, n)``.
+
+    The plane is the clipping plane of the panel -- the normal ``(x, y, z)`` of its Clipping
+    folder, ``z`` up by default, through the mesh centre moved ``dist`` along it -- and ``c`` the
+    mesh centre projected into it.  ``t2`` is the axis of ``z``, ``y`` or ``x`` that the normal
+    is farthest from, projected into the plane, ``t1 = t2 x n``, and both are one cell of the
+    grid long: ``2 radius / grid_size``, so that the grid spans the square the bounding sphere
+    of the mesh fits in.
+    """
+    n = lighting.normalize(np.asarray(normal, dtype=np.float64))
+    c = np.asarray(center, dtype=np.float64) - float(dist) * n
+    axis = (np.array([0.0, 0.0, 1.0]) if abs(n[2]) < 0.5 else
+            np.array([0.0, 1.0, 0.0]) if abs(n[1]) < 0.5 else np.array([1.0, 0.0, 0.0]))
+    t2 = axis - (axis @ n) * n
+    t1 = np.cross(t2, n)
+    step = 2.0 * float(radius) / int(grid_size)
+    return c, step * lighting.normalize(t1), step * lighting.normalize(t2), n
+
+
+def vector_samples(pos, value, n_segments, grid, grid_size, subpixel_bits=TEXTURE_SUBPIXEL_BITS):
+    """The value of the surface at the centre of every cell of the arrows' grid,
+    ``(grid_size, grid_size, k)`` with row ``i`` along ``t2`` and column ``j`` along ``t1``, and
+    the ``(grid_size, grid_size)`` mask of the cells the surface reaches.
+
+    ``ClippingVectorsObject`` renders the surface, with the shader's value in place of its colour
+    (``function_mode`` 4), into a ``grid_size``-square texture through an orthographic camera
+    that looks down the plane's normal at the square of the grid (:func:`arrow_grid`), and an
+    arrow reads the texel at its own centre.  A texel is a pixel of that picture: the value the
+    sub-triangle covering its centre interpolates there -- linearly, as nothing is foreshortened
+    -- from the one nearest the camera where several do, and the later one where they tie; 0
+    where the surface does not reach, which leaves the arrow out.  ``pos`` and ``value`` are the
+    lattice of the painted surface (:func:`lattice`), deformed as it is painted; the corners are
+    snapped to ``subpixel_bits`` of a texel first (:data:`TEXTURE_SUBPIXEL_BITS`; ``None``: not
+    at all), as the rasterizer snaps them.
+    """
+    c, t1, t2, n_hat = grid
+    n = int(grid_size)
+    tris = bezier.subtriangles(n_segments)
+    corner_p = pos[:, tris].reshape(-1, 3, 3)
+    corner_v = value[:, tris].reshape(-1, 3, value.shape[-1])
+    ok = np.isfinite(corner_p).all(axis=(1, 2)) & np.isfinite(corner_v).all(axis=(1, 2))
+    corner_p, corner_v = corner_p[ok], corner_v[ok]
+    # texel (i, j) has its centre at grid coordinates (u, v) = (j, i)
+    rel = corner_p - (c - 0.5 * n * (t1 + t2))
+    u = rel @ t1 / (t1 @ t1) - 0.5
+    v = rel @ t2 / (t2 @ t2) - 0.5
+    if subpixel_bits is not None:  # window coordinates u + 1/2, v + 1/2 on the snapping grid
+        unit = float(2 ** int(subpixel_bits))
+        u, v = np.round(u * unit) / unit, np.round(v * unit) / unit
+    near = rel @ n_hat
+    j0 = np.clip(np.ceil(u.min(axis=1)), 0, n).astype(np.int64)
+    j1 = np.clip(np.floor(u.max(axis=1)), -1, n - 1).astype(np.int64)
+    i0 = np.clip(np.ceil(v.min(axis=1)), 0, n).astype(np.int64)
+    i1 = np.clip(np.floor(v.max(axis=1)), -1, n - 1).astype(np.int64)
+    across, down = np.maximum(j1 - j0 + 1, 0), np.maximum(i1 - i0 + 1, 0)
+    count = across * down
+    tri = np.repeat(np.arange(len(count)), count)
+    k = np.arange(len(tri)) - np.repeat(np.cumsum(count) - count, count)
+    j = j0[tri] + k % across[tri]
+    i = i0[tri] + k // across[tri]
+    ua, ub, uc = (u[tri, m] for m in range(3))
+    va, vb, vc = (v[tri, m] for m in range(3))
+    area = (ub - ua) * (vc - va) - (uc - ua) * (vb - va)
+    sign = np.sign(area)
+    # the edge functions of the edges opposite a, b and c, positive inside whichever way round
+    # the triangle runs; with snapped corners and texel centres on whole numbers they are exact
+    edges = [((ub, vb), (uc, vc)), ((uc, vc), (ua, va)), ((ua, va), (ub, vb))]
+    lam, keep = [], area != 0.0
+    for (pu, pv), (qu, qv) in edges:
+        e = sign * ((qu - pu) * (i - pv) - (qv - pv) * (j - pu))
+        # a centre on the edge itself belongs to the triangle on the edge's right or below it,
+        # the top-left rule of the rasterizer: row 0 of the texture is the framebuffer's first,
+        # so its "top" is the low side of v -- the inward normal points along +u, or along +v
+        # for an edge along u
+        n_u, n_v = -sign * (qv - pv), sign * (qu - pu)
+        keep &= (e > 0.0) | ((e == 0.0) & ((n_u > 0.0) | ((n_u == 0.0) & (n_v > 0.0))))
+        lam.append(e / np.abs(np.where(area == 0.0, 1.0, area)))
+    inside = keep
+    l0, l1, l2 = lam
+    tri, i, j, lam = tri[inside], i[inside], j[inside], np.stack([l0, l1, l2], -1)[inside]
+    depth = (lam * near[tri]).sum(axis=1)
+    # per texel the nearest candidate, and of equal ones the last drawn: sort by texel, then
+    # depth, then draw order, and keep the last of each texel
+    cell = i * n + j
+    pick = np.lexsort((tri, depth, cell))
+    last = np.r_[cell[pick][1:] != cell[pick][:-1], True]
+    pick = pick[last]
+    out = np.zeros((n * n, corner_v.shape[-1]))
+    out[cell[pick]] = np.einsum("km,kmc->kc", lam[pick], corner_v[tri[pick]])
+    hit = np.zeros(n * n, dtype=bool)
+    hit[cell[pick]] = True
+    return out.reshape(n, n, -1), hit.reshape(n, n)
+
+
+def _arrow_instances(order, ctrl, *, center, radius, grid_size, offset, n_segments, vectors,
+                     deformation, mode, function_mode, complex_scale, clipping_normal,
+                     clipping_dist):
+    """The arrows a surface gets: their centres ``(k, 3)``, quaternions ``(k, 4)``, values
+    ``(k, 3)`` and the one size of all of them, in instance order ``i * grid_size + j``.  An
+    arrow of length 0 is sent behind the camera by the vertex program and draws nothing; it is
+    left out here."""
+    pos, value, _ = lattice(int(order), ctrl, vectors=vectors, deformation=deformation,
+                            mode=mode, function_mode=float(function_mode),
+                            complex_scale=complex_scale, n_segments=n_segments)
+    grid = arrow_grid(center, radius, grid_size, clipping_normal, clipping_dist)
+    c, t1, t2, n_hat = grid
+    samples, hit = vector_samples(pos, value, n_segments, grid, grid_size)
+    n = int(grid_size)
+    val = samples.reshape(n * n, -1)
+    keep = hit.reshape(-1) & (np.sqrt((val[:, :3] ** 2).sum(axis=1)) > 0.0)
+    ii, jj = np.divmod(np.arange(n * n), n)
+    size = 0.5 * float(np.linalg.norm(t1))
+    centre = (c + ((jj + 0.5) - 0.5 * n)[:, None] * t1 + ((ii + 0.5) - 0.5 * n)[:, None] * t2
+              + float(offset) * size * n_hat)[keep]
+    val = val[keep]
+    return centre, arrow_quaternion(val[:, :3]), val, size
+
+
+def vector_points(order, ctrl, **kwargs):
+    """Every vertex of every arrow :func:`paint_vectors` draws, ``(k, 3)``, for framing."""
+    centre, q, _, size = _arrow_instances(order, ctrl, **kwargs)
+    shape_pos = cone()[0]
+    return (centre[:, None] + size * rotate(shape_pos[None], q[:, None])).reshape(-1, 3)
+
+
+def paint_vectors(canvas, cam, order, ctrl, *, center, radius, grid_size=GRID_SIZE, offset=0.0,
+                  vmin, vmax, pal=None, n_segments=N_SEGMENTS, vectors=None, deformation=0.0,
+                  mode="none", function_mode=3.0, complex_scale=(1.0, 0.0), dark_backside=True,
+                  clipping_normal=(0.0, 0.0, 1.0), clipping_dist=0.0, less_equal=True):
+    """Draw the arrow glyphs of a vector field on a 2D mesh into ``canvas`` from camera ``cam``:
+    ``ClippingVectorsObject`` of ``mesh.ts`` with ``shader/vector_function.vert``.
+
+    Every cell of a ``grid_size`` square grid over the square the mesh's bounding sphere fits
+    in (:func:`arrow_grid`) whose centre the surface reaches gets one cone (:func:`cone`), the
+    same size everywhere -- half a cell to a unit of the geometry, so 0.75 of a cell long --
+    centred on the cell, turned from ``+y`` to the value there (:func:`arrow_quaternion`) and
+    moved ``offset`` half-cells along the plane's normal.  The value is the surface's own
+    (:func:`vector_samples`), the three-component ``value_`` that a two-component field fills
+    with its components and a zero.  The cones are lit as ``function.frag`` lights them with
+    ``SIDE_LIGHTS``, coloured by the part of the value the surface is coloured by, and drawn
+    after everything else with the depth test and no polygon offset, so that a cone at
+    ``offset`` 0 shows the half of it above the surface.  The normals follow the shader, which
+    turns ``normalMatrix * normal`` by the quaternion rather than the other way round.
+    """
+    function_mode = float(function_mode)
+    centre, q, val, size = _arrow_instances(
+        order, ctrl, center=center, radius=radius, grid_size=grid_size, offset=offset,
+        n_segments=n_segments, vectors=vectors, deformation=deformation, mode=mode,
+        function_mode=function_mode, complex_scale=complex_scale,
+        clipping_normal=clipping_normal, clipping_dist=clipping_dist)
+    if not len(centre):
+        return canvas
+    q = q[:, None]
+    shape_pos, shape_nrm, tris = cone()
+    points = (centre[:, None] + size * rotate(shape_pos[None], q)).reshape(-1, 3)
+    mv = cam.model_view
+    normal_matrix = np.linalg.inv(mv[:3, :3]).T
+    n_view = rotate((shape_nrm @ normal_matrix.T)[None], q).reshape(-1, 3)
+    values = np.repeat(val, len(shape_pos), axis=0)
+
+    px, py, depth, w = camera.to_pixels(
+        camera.clip_points(points, cam.model_view_projection), canvas.width, canvas.height)
+    p_view = camera.transform_points(points, mv)
+    # one indexed stack, instance by instance, each in the cone's own triangle order
+    corner = (np.arange(len(val))[:, None, None] * len(shape_pos) + tris[None]).reshape(-1, 3)
+    usable = np.isfinite(px) & np.isfinite(py) & np.isfinite(depth) & np.isfinite(w) & (w > 0.0)
+    corner = corner[usable[corner].all(axis=1)]
+    x, y, z, w = (a[corner] for a in (px, py, depth, w))
+    # gl_FrontFacing, as the surface pass reads it from the pixel corners
+    back = ((x[:, 1] - x[:, 0]) * (y[:, 2] - y[:, 0])
+            - (x[:, 2] - x[:, 0]) * (y[:, 1] - y[:, 0]) > 0.0)
+
+    def shade(fields, constants):
+        value_, p_, normal = fields
+        (back_,) = constants
+        normal = np.array(normal)
+        np.negative(normal, out=normal, where=back_[:, None])
+        return _fragment_colour(value_, normal, p_, back_, function_mode=function_mode,
+                                complex_scale=complex_scale, function_values=True,
+                                vmin=vmin, vmax=vmax, pal=pal, dark_backside=dark_backside,
+                                side_lights=True)
+
+    return _paint_stack(canvas, x, y, w, z, varyings=(values, p_view, n_view), corners=corner,
+                        attrs=(back,), shade=shade, less_equal=less_equal, offset=False)

@@ -20,6 +20,13 @@ SPEC = 0.3
 #: scene.uniforms.dark_backside
 DARK_BACKSIDE = True
 
+#: ``SIDE_LIGHTS`` in calcLight: four lights from the sides, ``normalize(±1, ±1, 0.3)`` in view
+#: space, each worth 0.4 of a diffuse light, with the main light's share cut to 0.8
+SIDE_LIGHT_DIRS = np.array([[1.0, 1.0, 0.3], [-1.0, 1.0, 0.3], [-1.0, -1.0, 0.3], [1.0, -1.0, 0.3]])
+SIDE_LIGHT_DIRS = SIDE_LIGHT_DIRS / np.linalg.norm(SIDE_LIGHT_DIRS, axis=1, keepdims=True)
+SIDE_LIGHT = 0.4
+MAIN_LIGHT_WITH_SIDES = 0.8
+
 
 def normalize(v, axis=-1):
     """Unit vectors, mapping a zero vector to zero instead of NaN."""
@@ -41,13 +48,15 @@ def _dot(a, b):
 
 def shade(color, normal, position, *, inside=False, dark_backside=DARK_BACKSIDE,
           light_dir=LIGHT_DIR, ambient=AMBIENT, diffuse_coeff=DIFFUSE,
-          shininess=SHININESS, spec_coeff=SPEC):
+          shininess=SHININESS, spec_coeff=SPEC, side_lights=False):
     """Shade ``color`` exactly as ``calcLight`` in shader/utils.h does.
 
     ``normal`` and ``position`` must already be in *view* space (``normal`` with the
     back-face flip applied, ``inside`` saying whether the flip happened).  The result is
     *not* clamped, matching the shader: the framebuffer clamps on write, so an overbright
-    highlight saturates a channel rather than darkening the others.
+    highlight saturates a channel rather than darkening the others.  ``side_lights`` is
+    the program compiled with ``SIDE_LIGHTS`` (:data:`SIDE_LIGHT_DIRS`), which adds to the
+    diffuse term only: the highlight stays the main light's.
     """
     color = np.atleast_2d(np.asarray(color, dtype=np.float64))
     n = normalize(np.atleast_2d(np.asarray(normal, dtype=np.float64)))
@@ -57,6 +66,10 @@ def shade(color, normal, position, *, inside=False, dark_backside=DARK_BACKSIDE,
     v = normalize(-p)
     dot_ns = _dot(n, s)
     sn = np.clip(dot_ns, 0.0, None)
+    if side_lights:
+        sn = sn * MAIN_LIGHT_WITH_SIDES
+        for direction in SIDE_LIGHT_DIRS:
+            sn = sn + SIDE_LIGHT * np.clip(n @ direction, 0.0, None)
     # -s + 2 (n.s) n, with the sum turned round and taken in place: the same roundings
     r = 2.0 * dot_ns[:, None] * n
     r -= s
