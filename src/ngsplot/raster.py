@@ -1415,13 +1415,32 @@ def vector_samples(pos, value, n_segments, grid, grid_size, subpixel_bits=TEXTUR
     return out.reshape(n, n, -1), hit.reshape(n, n)
 
 
+def on_surface(points, corners):
+    """Which of ``points`` ``(m, 2)`` lie on the triangles ``(t, 3, 2)``, edges included."""
+    points, corners = np.asarray(points, dtype=np.float64), np.asarray(corners, dtype=np.float64)
+    out = np.zeros(len(points), dtype=bool)
+    lo, hi = corners.min(axis=1), corners.max(axis=1)
+    a, b, c = corners[:, 0], corners[:, 1], corners[:, 2]
+    for s in range(0, len(points), 256):
+        q = points[s:s + 256]
+        i, k = np.nonzero((q[:, None, 0] >= lo[None, :, 0]) & (q[:, None, 0] <= hi[None, :, 0])
+                          & (q[:, None, 1] >= lo[None, :, 1]) & (q[:, None, 1] <= hi[None, :, 1]))
+        x = q[i]
+        d = [(v[k, 0] - u[k, 0]) * (x[:, 1] - u[k, 1]) - (v[k, 1] - u[k, 1]) * (x[:, 0] - u[k, 0])
+             for u, v in ((a, b), (b, c), (c, a))]
+        hit = ((d[0] >= 0) & (d[1] >= 0) & (d[2] >= 0)) | ((d[0] <= 0) & (d[1] <= 0) & (d[2] <= 0))
+        out[s + np.unique(i[hit])] = True
+    return out
+
+
 def _arrow_instances(order, ctrl, *, center, radius, grid_size, offset, n_segments, vectors,
                      deformation, mode, function_mode, complex_scale, clipping_normal,
-                     clipping_dist):
+                     clipping_dist, size=1.0, inside=False):
     """The arrows a surface gets: their centres ``(k, 3)``, quaternions ``(k, 4)``, values
     ``(k, 3)`` and the one size of all of them, in instance order ``i * grid_size + j``.  An
     arrow of length 0 is sent behind the camera by the vertex program and draws nothing; it is
-    left out here."""
+    left out here.  ``size`` scales the viewer's glyph; ``inside`` keeps only the arrows whose
+    glyph, seen down the plane's normal, lies on the surface: none over a hole or past the edge."""
     pos, value, _ = lattice(int(order), ctrl, vectors=vectors, deformation=deformation,
                             mode=mode, function_mode=float(function_mode),
                             complex_scale=complex_scale, n_segments=n_segments)
@@ -1432,11 +1451,22 @@ def _arrow_instances(order, ctrl, *, center, radius, grid_size, offset, n_segmen
     val = samples.reshape(n * n, -1)
     keep = hit.reshape(-1) & (np.sqrt((val[:, :3] ** 2).sum(axis=1)) > 0.0)
     ii, jj = np.divmod(np.arange(n * n), n)
-    size = 0.5 * float(np.linalg.norm(t1))
+    half = 0.5 * float(np.linalg.norm(t1))
     centre = (c + ((jj + 0.5) - 0.5 * n)[:, None] * t1 + ((ii + 0.5) - 0.5 * n)[:, None] * t2
-              + float(offset) * size * n_hat)[keep]
+              + float(offset) * half * n_hat)[keep]
     val = val[keep]
-    return centre, arrow_quaternion(val[:, :3]), val, size
+    q = arrow_quaternion(val[:, :3])
+    size = half * float(size)
+    if inside and len(centre):
+        e1, e2 = t1 / np.linalg.norm(t1), t2 / np.linalg.norm(t2)
+        glyph = centre[:, None] + size * rotate(cone()[0][None], q[:, None])  # (k, v, 3)
+        tris = bezier.subtriangles(n_segments)
+        corners = pos[:, tris].reshape(-1, 3, 3)
+        corners = corners[np.isfinite(corners).all(axis=(1, 2))]
+        uv = lambda x: np.stack([x @ e1, x @ e2], axis=-1)  # noqa: E731
+        on = on_surface(uv(glyph.reshape(-1, 3)), uv(corners)).reshape(glyph.shape[:2]).all(axis=1)
+        centre, q, val = centre[on], q[on], val[on]
+    return centre, q, val, size
 
 
 def vector_points(order, ctrl, **kwargs):
@@ -1451,7 +1481,8 @@ def vector_points(order, ctrl, **kwargs):
 def paint_vectors(canvas, cam, order, ctrl, *, center, radius, grid_size=GRID_SIZE, offset=0.0,
                   vmin, vmax, pal=None, n_segments=N_SEGMENTS, vectors=None, deformation=0.0,
                   mode="none", function_mode=3.0, complex_scale=(1.0, 0.0), dark_backside=True,
-                  clipping_normal=(0.0, 0.0, 1.0), clipping_dist=0.0, less_equal=True, colour=None):
+                  clipping_normal=(0.0, 0.0, 1.0), clipping_dist=0.0, less_equal=True, colour=None,
+                  size=1.0, inside=False):
     """Draw the arrow glyphs of a vector field on a 2D mesh into ``canvas`` from camera ``cam``:
     ``ClippingVectorsObject`` of ``mesh.ts`` with ``shader/vector_function.vert``.
 
@@ -1469,13 +1500,15 @@ def paint_vectors(canvas, cam, order, ctrl, *, center, radius, grid_size=GRID_SI
 
     ``colour``, an RGB triple, paints every cone in that one colour, lit the same way, in place of
     the colour of its value: arrows that stand out from a surface coloured by the same values.
+    ``size`` scales the glyph from the viewer's, and ``inside`` leaves out every arrow whose glyph
+    does not lie wholly on the surface (over a hole, past the edge): neither is the viewer's.
     """
     function_mode = float(function_mode)
     centre, q, val, size = _arrow_instances(
         order, ctrl, center=center, radius=radius, grid_size=grid_size, offset=offset,
         n_segments=n_segments, vectors=vectors, deformation=deformation, mode=mode,
         function_mode=function_mode, complex_scale=complex_scale,
-        clipping_normal=clipping_normal, clipping_dist=clipping_dist)
+        clipping_normal=clipping_normal, clipping_dist=clipping_dist, size=size, inside=inside)
     if not len(centre):
         return canvas
     q = q[:, None]

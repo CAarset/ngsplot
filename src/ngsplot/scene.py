@@ -341,8 +341,10 @@ def paint(render_data, *, width=None, height=None, view=None, canvas=None, fit=N
     ``vectors`` is the Objects folder's box for the arrows of a vector field
     (:func:`ngsplot.raster.paint_vectors`): ``True`` ticks it, ``False`` clears it, and a dict
     ticks it with the Vectors folder's ``grid_size`` and ``offset`` changed, and with ``colour``
-    (any matplotlib colour) paints every arrow in that colour instead of its value's; left out,
-    the payload's settings decide, as on the page.  Arrows belong to a real field of two components
+    (any matplotlib colour) paints every arrow in that colour instead of its value's, with
+    ``size`` scales the glyph from the viewer's, and with ``inside`` draws only the arrows that lie
+    wholly on the mesh (none over a hole or past the edge); left out, the payload's settings
+    decide, as on the page.  Arrows belong to a real field of two components
     on a 2D mesh; on a 3D mesh the page draws them only in its clipping plane, which is not
     painted here.
 
@@ -422,11 +424,12 @@ def _arrows(render_data, settings, vectors):
     folder's box is ticked; ``vectors`` (see :func:`paint`) ticks or clears it."""
     shown = settings["vectors"] if vectors is None else bool(vectors)
     grid_size, offset = settings["vectors_grid_size"], settings["vectors_offset"]
-    colour = None
+    colour, size, inside = None, 1.0, False
     if isinstance(vectors, dict):
-        unknown = set(vectors) - {"grid_size", "offset", "colour"}
+        unknown = set(vectors) - {"grid_size", "offset", "colour", "size", "inside"}
         if unknown:
-            raise TypeError(f"vectors takes grid_size, offset and colour, not {sorted(unknown)}")
+            raise TypeError(f"vectors takes grid_size, offset, colour, size and inside, not {sorted(unknown)}")
+        size, inside = float(vectors.get("size", 1.0)), bool(vectors.get("inside", False))
         grid_size = int(vectors.get("grid_size", grid_size))
         offset = float(vectors.get("offset", offset))
         if vectors.get("colour") is not None:
@@ -450,7 +453,7 @@ def _arrows(render_data, settings, vectors):
     if grid_size < 1:
         raise ValueError(f"the grid of the arrows needs at least one cell, not {grid_size}")
     return dict(grid_size=grid_size, offset=offset, clipping_normal=settings["clipping_normal"],
-                clipping_dist=settings["clipping_dist"], colour=colour)
+                clipping_dist=settings["clipping_dist"], colour=colour, size=size, inside=inside)
 
 
 def _outer_edges(render_data):

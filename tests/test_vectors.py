@@ -163,7 +163,7 @@ def test_arrows_need_a_field_of_two_components_on_a_2d_mesh():
     with pytest.raises(ValueError, match="two components"):
         scene.paint(scalar, width=90, height=60, vectors=True)
     scene.paint(dict(scalar, gui_settings={"Objects": {"Vectors": True}}), width=90, height=60)
-    with pytest.raises(TypeError, match="grid_size, offset and colour"):
+    with pytest.raises(TypeError, match="grid_size, offset, colour, size and inside"):
         scene.paint(gtdata.render_data_of("vectors"), width=90, height=60,
                     vectors={"grid": 3})
 
@@ -195,3 +195,31 @@ def test_arrows_of_one_colour_are_that_colour_lit():
     for x, y in np.rint(view.project(centre)[:, :2]).astype(int):
         pixel = np.median(dark[y - 1:y + 2, x - 1:x + 2].reshape(-1, 3), axis=0)
         assert pixel.max() - pixel.min() <= 2 and pixel.max() < 128, (x, y, pixel)  # grey: 0.1 lit, the highlight white
+
+
+def _glyphs(render_data, **kw):
+    """Every arrow's glyph vertices, (k, v, 3), as paint_vectors places them."""
+    settings = scene.settings_of(render_data)
+    ctrl, vectors = geometry.trig_points(render_data)
+    centre, q, _, size = raster._arrow_instances(
+        geometry.order_of(render_data), ctrl, center=render_data["mesh_center"],
+        radius=render_data["mesh_radius"], grid_size=10, offset=0.0, n_segments=5, vectors=vectors,
+        deformation=0.0, mode="none", function_mode=settings["function_mode"],
+        complex_scale=settings["complex_scale"], clipping_normal=(0.0, 0.0, 1.0), clipping_dist=0.0, **kw)
+    return centre, centre[:, None] + size * raster.rotate(raster.cone()[0][None], q[:, None])
+
+
+def test_size_scales_the_glyph_and_inside_keeps_it_on_the_mesh():
+    """size scales every glyph about its centre; inside keeps the arrows whose glyphs lie on the unit square, which
+    leaves out the cells at its edge whose cones reach past it."""
+    render_data = gtdata.render_data_of("vectors")
+    centre, full = _glyphs(render_data)
+    _, half = _glyphs(render_data, size=0.5)
+    np.testing.assert_allclose(half - centre[:, None], 0.5 * (full - centre[:, None]), atol=1e-12)
+    outside = ((full[..., :2] < -1e-12) | (full[..., :2] > 1 + 1e-12)).any(axis=(1, 2))
+    assert outside.any() and not outside.all()
+    kept_centre, kept = _glyphs(render_data, inside=True)
+    assert len(kept) == int((~outside).sum())
+    assert ((kept[..., :2] >= -1e-12) & (kept[..., :2] <= 1 + 1e-12)).all()
+    width, height = gtdata.framebuffer_of("vectors")
+    scene.paint(render_data, width=width, height=height, vectors={"size": 0.6, "inside": True, "colour": "k"})

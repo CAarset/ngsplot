@@ -58,7 +58,8 @@ Plot(gfc, eval="imag")                                           # plot the imag
 Plot(gfu, fit="box", width=900, height=None)                     # fit the canvas to a long domain
 Plot(gfv, vectors=True)                                          # the viewer's arrows on a vector field
 Plot(gfv, vectors={"grid_size": 20, "offset": 0.5})              # a finer grid of arrows, lifted
-Plot(gfv, vectors={"colour": "0.15"})                            # arrows of one colour, for print
+Plot(gfv, vectors={"colour": "0.15", "size": 0.6, "inside": True})  # for print: one colour, smaller,
+                                                                     # none over a hole or past the edge
 ```
 
 ## Features
