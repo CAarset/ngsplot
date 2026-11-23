@@ -340,8 +340,9 @@ def paint(render_data, *, width=None, height=None, view=None, canvas=None, fit=N
 
     ``vectors`` is the Objects folder's box for the arrows of a vector field
     (:func:`ngsplot.raster.paint_vectors`): ``True`` ticks it, ``False`` clears it, and a dict
-    ticks it with the Vectors folder's ``grid_size`` and ``offset`` changed; left out, the
-    payload's settings decide, as on the page.  Arrows belong to a real field of two components
+    ticks it with the Vectors folder's ``grid_size`` and ``offset`` changed, and with ``colour``
+    (any matplotlib colour) paints every arrow in that colour instead of its value's; left out,
+    the payload's settings decide, as on the page.  Arrows belong to a real field of two components
     on a 2D mesh; on a 3D mesh the page draws them only in its clipping plane, which is not
     painted here.
 
@@ -421,12 +422,17 @@ def _arrows(render_data, settings, vectors):
     folder's box is ticked; ``vectors`` (see :func:`paint`) ticks or clears it."""
     shown = settings["vectors"] if vectors is None else bool(vectors)
     grid_size, offset = settings["vectors_grid_size"], settings["vectors_offset"]
+    colour = None
     if isinstance(vectors, dict):
-        unknown = set(vectors) - {"grid_size", "offset"}
+        unknown = set(vectors) - {"grid_size", "offset", "colour"}
         if unknown:
-            raise TypeError(f"vectors takes grid_size and offset, not {sorted(unknown)}")
+            raise TypeError(f"vectors takes grid_size, offset and colour, not {sorted(unknown)}")
         grid_size = int(vectors.get("grid_size", grid_size))
         offset = float(vectors.get("offset", offset))
+        if vectors.get("colour") is not None:
+            from matplotlib.colors import to_rgb
+
+            colour = to_rgb(vectors["colour"])
         shown = True
     if not shown:
         return None
@@ -444,7 +450,7 @@ def _arrows(render_data, settings, vectors):
     if grid_size < 1:
         raise ValueError(f"the grid of the arrows needs at least one cell, not {grid_size}")
     return dict(grid_size=grid_size, offset=offset, clipping_normal=settings["clipping_normal"],
-                clipping_dist=settings["clipping_dist"])
+                clipping_dist=settings["clipping_dist"], colour=colour)
 
 
 def _outer_edges(render_data):

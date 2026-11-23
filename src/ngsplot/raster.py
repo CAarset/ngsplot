@@ -1440,7 +1440,9 @@ def _arrow_instances(order, ctrl, *, center, radius, grid_size, offset, n_segmen
 
 
 def vector_points(order, ctrl, **kwargs):
-    """Every vertex of every arrow :func:`paint_vectors` draws, ``(k, 3)``, for framing."""
+    """Every vertex of every arrow :func:`paint_vectors` draws, ``(k, 3)``, for framing (its colour
+    aside)."""
+    kwargs.pop("colour", None)
     centre, q, _, size = _arrow_instances(order, ctrl, **kwargs)
     shape_pos = cone()[0]
     return (centre[:, None] + size * rotate(shape_pos[None], q[:, None])).reshape(-1, 3)
@@ -1449,7 +1451,7 @@ def vector_points(order, ctrl, **kwargs):
 def paint_vectors(canvas, cam, order, ctrl, *, center, radius, grid_size=GRID_SIZE, offset=0.0,
                   vmin, vmax, pal=None, n_segments=N_SEGMENTS, vectors=None, deformation=0.0,
                   mode="none", function_mode=3.0, complex_scale=(1.0, 0.0), dark_backside=True,
-                  clipping_normal=(0.0, 0.0, 1.0), clipping_dist=0.0, less_equal=True):
+                  clipping_normal=(0.0, 0.0, 1.0), clipping_dist=0.0, less_equal=True, colour=None):
     """Draw the arrow glyphs of a vector field on a 2D mesh into ``canvas`` from camera ``cam``:
     ``ClippingVectorsObject`` of ``mesh.ts`` with ``shader/vector_function.vert``.
 
@@ -1464,6 +1466,9 @@ def paint_vectors(canvas, cam, order, ctrl, *, center, radius, grid_size=GRID_SI
     after everything else with the depth test and no polygon offset, so that a cone at
     ``offset`` 0 shows the half of it above the surface.  The normals follow the shader, which
     turns ``normalMatrix * normal`` by the quaternion rather than the other way round.
+
+    ``colour``, an RGB triple, paints every cone in that one colour, lit the same way, in place of
+    the colour of its value: arrows that stand out from a surface coloured by the same values.
     """
     function_mode = float(function_mode)
     centre, q, val, size = _arrow_instances(
@@ -1498,6 +1503,10 @@ def paint_vectors(canvas, cam, order, ctrl, *, center, radius, grid_size=GRID_SI
         (back_,) = constants
         normal = np.array(normal)
         np.negative(normal, out=normal, where=back_[:, None])
+        if colour is not None:
+            rgb = np.broadcast_to(np.asarray(colour, dtype=np.float64), normal.shape)
+            return lighting.shade(rgb, normal, p_, inside=back_, dark_backside=dark_backside,
+                                  side_lights=True)
         return _fragment_colour(value_, normal, p_, back_, function_mode=function_mode,
                                 complex_scale=complex_scale, function_values=True,
                                 vmin=vmin, vmax=vmax, pal=pal, dark_backside=dark_backside,

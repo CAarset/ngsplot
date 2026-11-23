@@ -163,7 +163,7 @@ def test_arrows_need_a_field_of_two_components_on_a_2d_mesh():
     with pytest.raises(ValueError, match="two components"):
         scene.paint(scalar, width=90, height=60, vectors=True)
     scene.paint(dict(scalar, gui_settings={"Objects": {"Vectors": True}}), width=90, height=60)
-    with pytest.raises(TypeError, match="grid_size and offset"):
+    with pytest.raises(TypeError, match="grid_size, offset and colour"):
         scene.paint(gtdata.render_data_of("vectors"), width=90, height=60,
                     vectors={"grid": 3})
 
@@ -183,3 +183,15 @@ def test_a_box_fit_holds_the_arrows():
     assert (x >= 0).all() and (x <= view.width).all() and (y >= 0).all() and (y <= view.height).all()
     bare = scene.frame(dict(render_data, gui_settings={}), width=400, height=None, fit="box")
     assert bare.height <= view.height
+
+
+def test_arrows_of_one_colour_are_that_colour_lit():
+    """vectors={"colour": ...} paints every cone in that colour under the arrows' light, in place of its value's."""
+    render_data = gtdata.render_data_of("vectors")
+    width, height = gtdata.framebuffer_of("vectors")
+    dark = scene.paint(render_data, width=width, height=height, vectors={"colour": "0.1"}).to_uint8()[..., :3]
+    centre = arrows_of(render_data)[0]
+    view = camera.Camera.from_render_data(render_data, width=width, height=height)
+    for x, y in np.rint(view.project(centre)[:, :2]).astype(int):
+        pixel = np.median(dark[y - 1:y + 2, x - 1:x + 2].reshape(-1, 3), axis=0)
+        assert pixel.max() - pixel.min() <= 2 and pixel.max() < 128, (x, y, pixel)  # grey: 0.1 lit, the highlight white
